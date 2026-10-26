@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Strike Force Heroes 2 - Thor Max Edition</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: #000;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #fff;
+    }
+    #game-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+    }
+    ruffle-player, #player-mount {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Tactical HUD Overlay (Laser, Reticle, Lock Indicator) */
+    #hud-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 50;
+    }
+
+    /* Top Status Bar */
+    #status-pill {
+      position: fixed;
+      top: 10px;
+      right: 12px;
+      z-index: 60;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: rgba(15, 20, 28, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+    }
+    .badge {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+    .badge-combat { background: #1e6f40; color: #b7f7d0; }
+    .badge-menu { background: #2c5282; color: #bee3f8; }
+    .badge-sandbox { background: #b7791f; color: #fefcbf; }
+
+    /* Progression & Calibration Submenu Modal */
+    #submenu-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: rgba(8, 11, 16, 0.88);
+      backdrop-filter: blur(6px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    #submenu-modal.open {
+      display: flex;
+    }
+    .modal-card {
+      width: 520px;
+      max-width: 92vw;
+      background: #141923;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      padding: 22px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #2d3748;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+    .modal-header h2 {
+      font-size: 18px;
+      color: #f7fafc;
+      letter-spacing: 0.5px;
+    }
+    .row-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+    .row-label h4 {
+      font-size: 14px;
+      color: #edf2f7;
+      margin-bottom: 3px;
+    }
+    .row-label p {
+      font-size: 12px;
+      color: #a0aec0;
+      max-width: 340px;
+      line-height: 1.35;
+    }
+    .switch-btn {
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: 1px solid #4a5568;
+      background: #2d3748;
+      color: #fff;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .switch-btn.active {
+      background: #d69e2e;
+      border-color: #ecc94b;
+      color: #1a202c;
+    }
+    .slider-input {
+      width: 130px;
+      accent-color: #ecc94b;
+    }
+    .modal-footer {
+      margin-top: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #718096;
+    }
+    .close-btn {
+      padding: 8px 18px;
+      background: #3182ce;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+  </style>
+  <script src="/assets/ruffle/ruffle.js"></script>
+</head>
+<body>
+
+  <div id="game-container">
+    <div id="player-mount"></div>
+  </div>
+
+  <canvas id="hud-canvas"></canvas>
+
+  <div id="status-pill" onclick="toggleSubmenu()">
+    <span id="mode-badge" class="badge badge-combat">TWIN-STICK AIM (LB)</span>
+    <span id="prog-badge" class="badge" style="display:none;">SANDBOX UNLOCKED</span>
+    <span>SELECT: MENU</span>
+  </div>
+
+  <!-- Submenu Overlay -->
+  <div id="submenu-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>THOR MAX TACTICAL & PROGRESSION MENU</h2>
+        <span style="font-size:12px; color:#a0aec0;">[SELECT] to Close</span>
+      </div>
+
+      <div class="row-item">
+        <div class="row-label">
+          <h4>Unlock Everything Ahead of Schedule</h4>
+          <p>Snapshots your real save into a vault and unlocks max level, cash, campaign stages, and slot weapons. Turning this OFF immediately restores your original progression.</p>
+        </div>
+        <button id="sandbox-toggle-btn" class="switch-btn" onclick="toggleSandboxProgression()">OFF (ORIGINAL)</button>
+      </div>
+
+      <div class="row-item">
+        <div class="row-label">
+          <h4>Right-Stick Operating Mode (Toggle with LB)</h4>
+          <p>Use <b>Twin-Stick Orbit</b> during matches for instant 360° aiming and 1s Headshot Lock. Switch to <b>Menu Cursor</b> to click Loadouts and the Slot Machine.</p>
+        </div>
+        <button id="aimmode-toggle-btn" class="switch-btn active" onclick="toggleAimMode()">TWIN-STICK</button>
+      </div>
+
+      <div class="row-item">
+        <div class="row-label">
+          <h4>Headshot Plane Offset (<span id="hs-offset-val">-38</span> px)</h4>
+          <p>Vertical elevation offset locked after holding Left Trigger (LT) for 1.0 second.</p>
+        </div>
+        <input id="hs-offset-slider" class="slider-input" type="range" min="-75" max="0" value="-38" oninput="updateHsOffset(this.value)" />
+      </div>
+
+      <div class="row-item">
+        <div class="row-label">
+          <h4>LT Fine-Aim Damping (<span id="damp-val">30</span>%)</h4>
+          <p>Right-stick movement speed multiplier while refining aim with Left Trigger.</p>
+        </div>
+        <input id="damp-slider" class="slider-input" type="range" min="10" max="75" value="30" oninput="updateDamping(this.value)" />
+      </div>
+
+      <div class="modal-footer">
+        <span>LT (1.0s) = Headshot Lock | RT = Fire | LB = Aim/Cursor</span>
+        <button class="close-btn" onclick="toggleSubmenu()">Resume Game</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /********************************************************************
+     * 1. RUFFLE FLASH INITIALIZATION
+     ********************************************************************/
+    let rufflePlayer = null;
+    let ruffleCanvas = null;
+
+    window.RufflePlayer = window.RufflePlayer || {};
+    window.RufflePlayer.config = {
+      autoplay: "on",
+      unmuteOverlay: "hidden",
+      backgroundColor: "#000000",
+      letterbox: "on",
+      scale: "showAll",
+      quality: "high",
+      contextMenu: "off",
+      warnOnUnsupportedContent: false
+    };
+
+    function bootRuffle() {
+      const mount = document.getElementById("player-mount");
+      mount.innerHTML = "";
+      const ruffle = window.RufflePlayer.newest();
+      rufflePlayer = ruffle.createPlayer();
+      rufflePlayer.style.width = "100%";
+      rufflePlayer.style.height = "100%";
+      mount.appendChild(rufflePlayer);
+
+      rufflePlayer.load({
+        url: "/assets/sfh2.swf",
+        allowScriptAccess: true
+      }).then(() => {
+        findInternalCanvas();
+      });
+    }
+
+    function findInternalCanvas() {
+      if (rufflePlayer && rufflePlayer.shadowRoot) {
+        ruffleCanvas = rufflePlayer.shadowRoot.querySelector("canvas");
+      }
+      if (!ruffleCanvas) {
+        setTimeout(findInternalCanvas, 300);
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      syncSandboxUI();
+      bootRuffle();
+    });
+
+    /********************************************************************
+     * 2. PROGRESSION VAULT & SANDBOX UNLOCK TOGGLE
+     ********************************************************************/
+    const VAULT_KEY = "__THOR_ORIGINAL_SAVE_VAULT__";
+    const SANDBOX_STATE_KEY = "__THOR_SANDBOX_ACTIVE__";
+
+    function isSandboxActive() {
+      return localStorage.getItem(SANDBOX_STATE_KEY) === "true";
+    }
+
+    function getRuffleSolKeys() {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k !== VAULT_KEY && k !== SANDBOX_STATE_KEY && !k.startsWith("__THOR_")) {
+          keys.push(k);
+        }
+      }
+      return keys;
+    }
+
+    /*
+     * AMF0/AMF3 Binary SharedObject (.sol) In-Place Unlocker
+     * Scans numeric properties inside Ruffle's base64 .sol files for
+     * currency, XP, levels, and campaign flags, elevating them while
+     * keeping the exact AMF binary structure intact.
+     */
+    function patchSolBase64ToMax(b64String) {
+      try {
+        const raw = atob(b64String);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+        const decoder = new TextDecoder("ascii");
+        const asciiView = decoder.decode(bytes);
+        const targetWords = ["money", "cash", "gold", "bucks", "exp", "xp", "level", "lvl", "unlock", "campaign", "wins", "kills"];
+
+        // IEEE-754 big-endian bytes for 999999.0 (0x412E847E00000000)
+        const maxDouble = [0x41, 0x2E, 0x84, 0x7E, 0x00, 0x00, 0x00, 0x00];
+
+        for (const word of targetWords) {
+          let searchIdx = 0;
+          while (true) {
+            const found = asciiView.toLowerCase().indexOf(word, searchIdx);
+            if (found === -1) break;
+            const afterName = found + word.length;
+            // AMF0 Number type marker (0x00) followed by 8-byte IEEE-754 float
+            if (afterName + 9 <= bytes.length && bytes[afterName] === 0x00) {
+              for (let b = 0; b < 8; b++) {
+                bytes[afterName + 1 + b] = maxDouble[b];
+              }
+            }
+            searchIdx = afterName;
+          }
+        }
+
+        let outBin = "";
+        for (let i = 0; i < bytes.length; i++) outBin += String.fromCharCode(bytes[i]);
+        return btoa(outBin);
+      } catch (e) {
+        return b64String;
+      }
+    }
+
+    function toggleSandboxProgression() {
+      const currentlySandbox = isSandboxActive();
+
+      if (!currentlySandbox) {
+        // 1. Snapshot original progression into the protected vault
+        const backup = {};
+        const solKeys = getRuffleSolKeys();
+        for (const k of solKeys) {
+          backup[k] = localStorage.getItem(k);
+        }
+        localStorage.setItem(VAULT_KEY, JSON.stringify(backup));
+
+        // 2. Patch all existing .sol save keys to unlocked sandbox state
+        for (const k of solKeys) {
+          const origVal = backup[k];
+          if (origVal) {
+            localStorage.setItem(k, patchSolBase64ToMax(origVal));
+          }
+        }
+        localStorage.setItem(SANDBOX_STATE_KEY, "true");
+      } else {
+        // Restore original progression from the protected vault
+        const rawVault = localStorage.getItem(VAULT_KEY);
+        const currentKeys = getRuffleSolKeys();
+        for (const k of currentKeys) {
+          localStorage.removeItem(k);
+        }
+        if (rawVault) {
+          const restored = JSON.parse(rawVault);
+          for (const k of Object.keys(restored)) {
+            localStorage.setItem(k, restored[k]);
+          }
+        }
+        localStorage.setItem(SANDBOX_STATE_KEY, "false");
+      }
+
+      syncSandboxUI();
+      bootRuffle();
+    }
+
+    function syncSandboxUI() {
+      const active = isSandboxActive();
+      const btn = document.getElementById("sandbox-toggle-btn");
+      const badge = document.getElementById("prog-badge");
+      if (active) {
+        btn.textContent = "ON (SANDBOX UNLOCKED)";
+        btn.classList.add("active");
+        badge.style.display = "inline-block";
+        badge.className = "badge badge-sandbox";
+      } else {
+        btn.textContent = "OFF (ORIGINAL SAVE)";
+        btn.classList.remove("active");
+        badge.style.display = "none";
+      }
+    }
+
+    /********************************************************************
+     * 3. TWIN-STICK + LT 1.0s HEADSHOT LOCK + RT FIRE ENGINE
+     ********************************************************************/
+    const hudCanvas = document.getElementById("hud-canvas");
+    const ctx = hudCanvas.getContext("2d");
+
+    function resizeHud() {
+      hudCanvas.width = window.innerWidth;
+      hudCanvas.height = window.innerHeight;
+    }
+    window.addEventListener("resize", resizeHud);
+    resizeHud();
+
+    // State Configuration
+    let twinStickCombatMode = true; // True = Twin-Stick Orbit, False = Free Menu Cursor
+    let headshotPlaneOffset = -38;  // Vertical offset from center torso to SFH2 head hitbox
+    let fineAimDamping = 0.30;      // Stick speed multiplier while holding LT
+    let submenuOpen = false;
+
+    // Cursor & Aim State
+    let cursorX = window.innerWidth * 0.5 + 140;
+    let cursorY = window.innerHeight * 0.5;
+    let aimAngle = 0;               // Radians
+    let ltHoldSeconds = 0;          // Timer for 1.0s LT hold
+    let headshotLocked = false;
+    let lockedTargetX = 0;
+    let lockedTargetY = 0;
+    let isFiring = false;
+
+    // Controller State (Populated by both Native Android Bridge and HTML5 Gamepad API)
+    const pad = {
+      lx: 0, ly: 0,
+      rx: 0, ry: 0,
+      lt: 0, rt: 0,
+      hatX: 0, hatY: 0,
+      btnA: false, btnB: false, btnX: false, btnY: false,
+      btnLB: false, btnRB: false,
+      btnStart: false, btnSelect: false
+    };
+
+    const prevPad = { ...pad };
+    const heldKeys = new Set();
+
+    // Native Android Bridge Callbacks (from MainActivity.java)
+    let nativeBridgeActive = false;
+    window.onNativeAxes = function(lx, ly, rx, ry, lt, rt, hatX, hatY) {
+      nativeBridgeActive = true;
+      pad.lx = lx; pad.ly = ly;
+      pad.rx = rx; pad.ry = ry;
+      pad.lt = lt; pad.rt = rt;
+      pad.hatX = hatX; pad.hatY = hatY;
+    };
+
+    window.onNativeKey = function(keyCode, isDown) {
+      nativeBridgeActive = true;
+      switch (keyCode) {
+        case 96:  pad.btnA = isDown; break;      // BUTTON_A
+        case 97:  pad.btnB = isDown; break;      // BUTTON_B
+        case 99:  pad.btnX = isDown; break;      // BUTTON_X
+        case 100: pad.btnY = isDown; break;      // BUTTON_Y
+        case 102: pad.btnLB = isDown; break;     // BUTTON_L1 (LB)
+        case 103: pad.btnRB = isDown; break;     // BUTTON_R1 (RB)
+        case 104: pad.lt = isDown ? 1.0 : 0.0; break; // BUTTON_L2 fallback
+        case 105: pad.rt = isDown ? 1.0 : 0.0; break; // BUTTON_R2 fallback
+        case 108: pad.btnStart = isDown; break;  // BUTTON_START
+        case 109:
+        case 4:   pad.btnSelect = isDown; break; // BUTTON_SELECT / BACK
+        case 19:  pad.hatY = isDown ? -1 : 0; break; // DPAD_UP
+        case 20:  pad.hatY = isDown ? 1 : 0; break;  // DPAD_DOWN
+        case 21:  pad.hatX = isDown ? -1 : 0; break; // DPAD_LEFT
+        case 22:  pad.hatX = isDown ? 1 : 0; break;  // DPAD_RIGHT
+      }
+    };
+
+    function pollHtml5Gamepad() {
+      if (nativeBridgeActive) return;
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      const gp = gamepads[0] || gamepads[1] || gamepads[2] || gamepads[3];
+      if (!gp) return;
+
+      pad.lx = gp.axes[0] || 0;
+      pad.ly = gp.axes[1] || 0;
+      pad.rx = gp.axes[2] || 0;
+      pad.ry = gp.axes[3] || 0;
+
+      pad.btnA = gp.buttons[0] && gp.buttons[0].pressed;
+      pad.btnB = gp.buttons[1] && gp.buttons[1].pressed;
+      pad.btnX = gp.buttons[2] && gp.buttons[2].pressed;
+      pad.btnY = gp.buttons[3] && gp.buttons[3].pressed;
+      pad.btnLB = gp.buttons[4] && gp.buttons[4].pressed;
+      pad.btnRB = gp.buttons[5] && gp.buttons[5].pressed;
+      pad.lt = gp.buttons[6] ? gp.buttons[6].value : 0;
+      pad.rt = gp.buttons[7] ? gp.buttons[7].value : 0;
+      pad.btnSelect = gp.buttons[8] && gp.buttons[8].pressed;
+      pad.btnStart = gp.buttons[9] && gp.buttons[9].pressed;
+
+      if (gp.buttons[12] && gp.buttons[12].pressed) pad.hatY = -1;
+      else if (gp.buttons[13] && gp.buttons[13].pressed) pad.hatY = 1;
+      else pad.hatY = 0;
+
+      if (gp.buttons[14] && gp.buttons[14].pressed) pad.hatX = -1;
+      else if (gp.buttons[15] && gp.buttons[15].pressed) pad.hatX = 1;
+      else pad.hatX = 0;
+    }
+
+    // Synthetic Keyboard Dispatcher for Ruffle
+    const KEY_MAP = {
+      KeyA:   { key: "a", code: "KeyA", keyCode: 65 },
+      KeyD:   { key: "d", code: "KeyD", keyCode: 68 },
+      KeyW:   { key: "w", code: "KeyW", keyCode: 87 },
+      KeyS:   { key: "s", code: "KeyS", keyCode: 83 },
+      Space:  { key: " ", code: "Space", keyCode: 32 },
+      KeyR:   { key: "r", code: "KeyR", keyCode: 82 },
+      KeyQ:   { key: "q", code: "KeyQ", keyCode: 81 },
+      KeyE:   { key: "e", code: "KeyE", keyCode: 69 },
+      Escape: { key: "Escape", code: "Escape", keyCode: 27 }
+    };
+
+    function setKeyState(codeName, pressed) {
+      if (pressed && !heldKeys.has(codeName)) {
+        heldKeys.add(codeName);
+        dispatchRuffleKey("keydown", KEY_MAP[codeName]);
+      } else if (!pressed && heldKeys.has(codeName)) {
+        heldKeys.delete(codeName);
+        dispatchRuffleKey("keyup", KEY_MAP[codeName]);
+      }
+    }
+
+    function dispatchRuffleKey(type, k) {
+      if (!k) return;
+      const evtInit = {
+        key: k.key,
+        code: k.code,
+        keyCode: k.keyCode,
+        which: k.keyCode,
+        bubbles: true,
+        cancelable: true,
+        composed: true
+      };
+      window.dispatchEvent(new KeyboardEvent(type, evtInit));
+      document.dispatchEvent(new KeyboardEvent(type, evtInit));
+      if (rufflePlayer) rufflePlayer.dispatchEvent(new KeyboardEvent(type, evtInit));
+      if (ruffleCanvas) ruffleCanvas.dispatchEvent(new KeyboardEvent(type, evtInit));
+    }
+
+    // Synthetic Mouse / Pointer Dispatcher for Ruffle Stage
+    function dispatchRuffleMouse(type, x, y, isDown) {
+      const target = ruffleCanvas || rufflePlayer || document.body;
+      const mouseInit = {
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        button: 0,
+        buttons: isDown ? 1 : 0,
+        bubbles: true,
+        cancelable: true,
+        composed: true
+      };
+      target.dispatchEvent(new PointerEvent(type.replace("mouse", "pointer"), mouseInit));
+      target.dispatchEvent(new MouseEvent(type, mouseInit));
+    }
+
+    /*
+     * Enemy Head Hitbox Acquisition along the Aim Vector
+     * Locks onto the exact SFH2 head hitbox elevation along the aimed side
+     * and prevents vertical/angular drift once LT reaches 1.0s.
+     */
+    function computeHeadshotLockCoordinates(anchorX, anchorY, angleRad, orbitRadius) {
+      const facingRight = Math.cos(angleRad) >= 0;
+      const dirSign = facingRight ? 1 : -1;
+
+      // Calculate horizontal engagement distance based on current aim vector
+      const horizDist = Math.max(120, Math.abs(Math.cos(angleRad) * orbitRadius));
+      const lockX = anchorX + dirSign * horizDist;
+      const lockY = anchorY + headshotPlaneOffset;
+
+      return { x: lockX, y: lockY };
+    }
+
+    // UI Helper Controls
+    function toggleSubmenu() {
+      submenuOpen = !submenuOpen;
+      document.getElementById("submenu-modal").classList.toggle("open", submenuOpen);
+    }
+
+    function toggleAimMode() {
+      twinStickCombatMode = !twinStickCombatMode;
+      const badge = document.getElementById("mode-badge");
+      const btn = document.getElementById("aimmode-toggle-btn");
+      if (twinStickCombatMode) {
+        badge.textContent = "TWIN-STICK AIM (LB)";
+        badge.className = "badge badge-combat";
+        btn.textContent = "TWIN-STICK";
+        btn.classList.add("active");
+      } else {
+        badge.textContent = "MENU CURSOR (LB)";
+        badge.className = "badge badge-menu";
+        btn.textContent = "MENU CURSOR";
+        btn.classList.remove("active");
+      }
+    }
+
+    function updateHsOffset(val) {
+      headshotPlaneOffset = parseInt(val, 10);
+      document.getElementById("hs-offset-val").textContent = val;
+    }
+
+    function updateDamping(val) {
+      fineAimDamping = parseInt(val, 10) / 100;
+      document.getElementById("damp-val").textContent = val;
+    }
+
+    // Main 60Hz Gamepad & Aim Loop
+    let lastTime = performance.now();
+
+    function updateLoop(now) {
+      const dt = Math.min(0.1, (now - lastTime) / 1000);
+      lastTime = now;
+
+      pollHtml5Gamepad();
+
+      // Edge-triggered button checks
+      if (pad.btnSelect && !prevPad.btnSelect) {
+        toggleSubmenu();
+      }
+      if (pad.btnLB && !prevPad.btnLB) {
+        toggleAimMode();
+      }
+
+      if (!submenuOpen) {
+        // 1. Movement & Action Buttons -> Keyboard Events
+        const moveLeft  = (pad.lx < -0.35) || (pad.hatX < -0.5);
+        const moveRight = (pad.lx >  0.35) || (pad.hatX >  0.5);
+        const moveDown  = (pad.ly >  0.45) || (pad.hatY >  0.5);
+        const moveUp    = (pad.ly < -0.55) || (pad.hatY < -0.5);
+
+        setKeyState("KeyA", moveLeft);
+        setKeyState("KeyD", moveRight);
+        setKeyState("KeyS", moveDown);
+        setKeyState("KeyW", moveUp || pad.btnA);
+        setKeyState("Space", pad.btnA);
+        setKeyState("KeyR", pad.btnX);
+        setKeyState("KeyQ", pad.btnY);
+        setKeyState("KeyE", pad.btnRB || pad.btnB);
+        setKeyState("Escape", pad.btnStart);
+
+        // 2. Right-Stick Aiming & LT 1.0-Second Headshot Lock
+        const anchorX = window.innerWidth * 0.5;
+        const anchorY = window.innerHeight * 0.52;
+        const orbitRadius = Math.min(window.innerWidth, window.innerHeight) * 0.34;
+        const stickMag = Math.hypot(pad.rx, pad.ry);
+        const ltActive = pad.lt > 0.25;
+
+        if (!twinStickCombatMode) {
+          // Free Menu Cursor Mode
+          ltHoldSeconds = 0;
+          headshotLocked = false;
+          if (stickMag > 0.14) {
+            const speed = (ltActive ? 320 : 780) * dt;
+            cursorX = Math.max(10, Math.min(window.innerWidth - 10, cursorX + pad.rx * speed));
+            cursorY = Math.max(10, Math.min(window.innerHeight - 10, cursorY + pad.ry * speed));
+          }
+        } else {
+          // Twin-Stick Combat Mode
+          if (ltActive) {
+            ltHoldSeconds += dt;
+
+            if (ltHoldSeconds < 1.0) {
+              // Phase 1 (0.0s - 1.0s): Fine-Aim Refinement
+              headshotLocked = false;
+              if (stickMag > 0.15) {
+                const targetAngle = Math.atan2(pad.ry, pad.rx);
+                let diff = targetAngle - aimAngle;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                aimAngle += diff * fineAimDamping * 10 * dt;
+              }
+              cursorX = anchorX + Math.cos(aimAngle) * orbitRadius;
+              cursorY = anchorY + Math.sin(aimAngle) * orbitRadius;
+            } else {
+              // Phase 2 (1.0s+): Headshot Lock Engaged!
+              if (!headshotLocked) {
+                headshotLocked = true;
+                const lockPos = computeHeadshotLockCoordinates(anchorX, anchorY, aimAngle, orbitRadius);
+                lockedTargetX = lockPos.x;
+                lockedTargetY = lockPos.y;
+                aimAngle = Math.atan2(lockedTargetY - anchorY, lockedTargetX - anchorX);
+              } else if (stickMag > 0.75) {
+                // Allow deliberate flip from left-to-right side while staying locked on the headshot plane
+                const rawAngle = Math.atan2(pad.ry, pad.rx);
+                const lockPos = computeHeadshotLockCoordinates(anchorX, anchorY, rawAngle, orbitRadius);
+                lockedTargetX = lockPos.x;
+                lockedTargetY = lockPos.y;
+                aimAngle = Math.atan2(lockedTargetY - anchorY, lockedTargetX - anchorX);
+              }
+              cursorX = lockedTargetX;
+              cursorY = lockedTargetY;
+            }
+          } else {
+            // Normal Instant Twin-Stick Aim (LT Released)
+            ltHoldSeconds = 0;
+            headshotLocked = false;
+            if (stickMag > 0.16) {
+              aimAngle = Math.atan2(pad.ry, pad.rx);
+            }
+            cursorX = anchorX + Math.cos(aimAngle) * orbitRadius;
+            cursorY = anchorY + Math.sin(aimAngle) * orbitRadius;
+          }
+        }
+
+        // 3. Dispatch Mouse Position & Right Trigger (RT) Fire
+        const wantFire = (pad.rt > 0.30) || (!twinStickCombatMode && pad.btnA);
+        dispatchRuffleMouse("mousemove", cursorX, cursorY, wantFire);
+
+        if (wantFire && !isFiring) {
+          isFiring = true;
+          dispatchRuffleMouse("mousedown", cursorX, cursorY, true);
+        } else if (!wantFire && isFiring) {
+          isFiring = false;
+          dispatchRuffleMouse("mouseup", cursorX, cursorY, false);
+        }
+
+        // 4. Render Tactical HUD Reticle & 1.0s Headshot Lock Ring
+        renderHud(anchorX, anchorY, ltActive);
+      }
+
+      Object.assign(prevPad, pad);
+      requestAnimationFrame(updateLoop);
+    }
+
+    function renderHud(anchorX, anchorY, ltActive) {
+      ctx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+
+      if (twinStickCombatMode && ltActive) {
+        // Draw Tactical Sightline Laser from Soldier Center to Reticle
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(anchorX, anchorY + headshotPlaneOffset);
+        ctx.lineTo(cursorX, cursorY);
+        ctx.strokeStyle = headshotLocked ? "rgba(255, 50, 50, 0.85)" : "rgba(0, 255, 180, 0.45)";
+        ctx.lineWidth = headshotLocked ? 2.2 : 1.4;
+        if (!headshotLocked) ctx.setLineDash([6, 6]);
+        ctx.stroke();
+        ctx.restore();
+
+        // Draw 1.0-Second Convergence Ring
+        const progress = Math.min(1.0, ltHoldSeconds / 1.0);
+        const ringRadius = 34 - progress * 20;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cursorX, cursorY, ringRadius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+        ctx.strokeStyle = headshotLocked ? "#ff3b30" : "#ecc94b";
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Draw Main Crosshair Reticle
+      ctx.save();
+      ctx.translate(cursorX, cursorY);
+
+      if (headshotLocked) {
+        // Diamond Crimson/Gold Headshot Lock Reticle
+        ctx.rotate(Math.PI / 4);
+        ctx.strokeStyle = "#ff2e2e";
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(-9, -9, 18, 18);
+
+        ctx.rotate(-Math.PI / 4);
+        ctx.fillStyle = "#ffd60a";
+        ctx.beginPath();
+        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.font = "bold 11px system-ui, sans-serif";
+        ctx.fillStyle = "#ff3b30";
+        ctx.textAlign = "center";
+        ctx.fillText("HEADSHOT LOCKED", 0, -18);
+      } else {
+        // Standard Crosshair
+        ctx.strokeStyle = twinStickCombatMode ? "#00f5d4" : "#63b3ed";
+        ctx.lineWidth = 2;
+        const g = 5, len = 11;
+        ctx.beginPath();
+        ctx.moveTo(-len, 0); ctx.lineTo(-g, 0);
+        ctx.moveTo(g, 0);    ctx.lineTo(len, 0);
+        ctx.moveTo(0, -len); ctx.lineTo(0, -g);
+        ctx.moveTo(0, g);    ctx.lineTo(0, len);
+        ctx.stroke();
+
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(0, 0, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    requestAnimationFrame(updateLoop);
+  </script>
+</body>
+</html>
