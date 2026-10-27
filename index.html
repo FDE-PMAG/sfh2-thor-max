@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -203,7 +204,7 @@
       <div class="row-item">
         <div class="row-label">
           <h4>Aiming Control Scheme (Cycle in-game with LB)</h4>
-          <p><b>Metroid Dread:</b> Auto-zeros aim forward as you run; hold <b>LT</b> for 360° Laser Sight & 1s Headshot Lock.<br><b>Twin-Stick:</b> Progressive 360° Right-Stick aim that zeros forward on release.<br><b>Menu Cursor:</b> Free virtual mouse for loadouts & slots.</p>
+          <p><b>Metroid Dread:</b> Auto-zeros aim forward in direction of travel; hold <b>LT</b> for 360° Laser Sight & 1s Headshot Lock.<br><b>Twin-Stick:</b> Progressive 360° Right-Stick aim that zeros forward on release.<br><b>Menu Cursor:</b> Free virtual mouse for loadouts & slots.</p>
         </div>
         <button id="aimmode-toggle-btn" class="switch-btn active" onclick="cycleControlMode()">METROID DREAD</button>
       </div>
@@ -211,7 +212,7 @@
       <div class="row-item">
         <div class="row-label">
           <h4>Unlock Everything Ahead of Schedule</h4>
-          <p>Backs up your real save into a vault and unlocks max level, cash, and campaign stages. Turning this OFF restores your original progression.</p>
+          <p>Snapshots your real save into a vault and unlocks max level, cash, and campaign stages. Turning this OFF restores your original progression.</p>
         </div>
         <button id="sandbox-toggle-btn" class="switch-btn" onclick="toggleSandboxProgression()">OFF (ORIGINAL)</button>
       </div>
@@ -238,6 +239,14 @@
           <p>Vertical elevation locked after holding Left Trigger (LT) for 1.0 second.</p>
         </div>
         <input id="hs-offset-slider" class="slider-input" type="range" min="-80" max="10" value="-38" oninput="updateHsOffset(this.value)" />
+      </div>
+
+      <div class="row-item">
+        <div class="row-label">
+          <h4>Recalibrate Sticks & Triggers</h4>
+          <p>Release both sticks and triggers, then tap to zero out all resting axis baselines.</p>
+        </div>
+        <button class="switch-btn" onclick="resetCalibration()">ZERO AXES</button>
       </div>
 
       <div class="telemetry-box" id="stick-telemetry">
@@ -282,18 +291,15 @@
       rufflePlayer.load({
         url: "/assets/sfh2.swf",
         allowScriptAccess: true
-      }).then(() => {
-        findInternalCanvas();
       });
     }
 
-    function findInternalCanvas() {
+    function getActiveRuffleCanvas() {
+      if (ruffleCanvas && ruffleCanvas.isConnected) return ruffleCanvas;
       if (rufflePlayer && rufflePlayer.shadowRoot) {
         ruffleCanvas = rufflePlayer.shadowRoot.querySelector("canvas");
       }
-      if (!ruffleCanvas) {
-        setTimeout(findInternalCanvas, 300);
-      }
+      return ruffleCanvas;
     }
 
     window.addEventListener("DOMContentLoaded", () => {
@@ -397,7 +403,7 @@
     }
 
     /********************************************************************
-     * 3. MULTI-AXIS CONTROLLER CALIBRATION & INPUT ENGINE
+     * 3. NATIVE ANDROID GAMEPAD CALIBRATION & INPUT ENGINE
      ********************************************************************/
     const hudCanvas = document.getElementById("hud-canvas");
     const ctx = hudCanvas.getContext("2d");
@@ -412,20 +418,19 @@
     /*
      * Control Modes:
      * 0 = METROID DREAD (Auto-zero to travel direction; hold LT for 360° Laser Sight & 1s Headshot Lock)
-     * 1 = TWIN-STICK PROGRESSIVE (Progressive speed 360° Right Stick + Auto-zero to travel direction when stick released)
-     * 2 = MENU CURSOR (Free virtual mouse for navigating menus, loadouts, and slot machine)
+     * 1 = TWIN-STICK PROGRESSIVE (Progressive speed 360° Right Stick + Auto-zero to travel direction when released)
+     * 2 = MENU CURSOR (Free virtual mouse for loadouts & slot machine)
      */
     let controlMode = 0;
-    let stickDeadzone = 0.25;         // 25% radial deadzone
-    let maxTurnSpeedDeg = 420;        // Max degrees/sec at full stick deflection
-    let headshotPlaneOffset = -38;    // Vertical offset to head level
-    let gunShoulderOffset = -14;      // Normal horizontal fire elevation relative to center
+    let stickDeadzone = 0.25;
+    let maxTurnSpeedDeg = 420;
+    let headshotPlaneOffset = -38;
+    let gunShoulderOffset = -14;
     let submenuOpen = false;
 
-    // Direction of Travel & Aim State
     let travelDir = 1;                // +1 = Facing Right, -1 = Facing Left
-    let aimAngle = 0;                 // Radians (0 = Right, Math.PI = Left)
-    let cursorX = window.innerWidth * 0.85;
+    let aimAngle = 0;                 // 0 = Right, Math.PI = Left
+    let cursorX = window.innerWidth * 0.78;
     let cursorY = window.innerHeight * 0.5;
     let ltHoldSeconds = 0;
     let headshotLocked = false;
@@ -438,132 +443,103 @@
       hatX: 0, hatY: 0,
       btnA: false, btnB: false, btnX: false, btnY: false,
       btnLB: false, btnRB: false,
-      btnStart: false, btnSelect: false,
-      source: "Waiting"
+      btnL2Key: false, btnR2Key: false,
+      btnStart: false, btnSelect: false
     };
 
     const prevPad = { ...pad };
     const heldKeys = new Set();
 
-    // Native Fallback Storage (rejects trigger axes resting near -1.0)
-    const nativeState = {
-      active: false,
-      lx: 0, ly: 0,
-      rx: 0, ry: 0,
-      lt: 0, rt: 0,
-      hatX: 0, hatY: 0
-    };
+    // Auto-Zero Baseline Calibration Table
+    let baselines = {};
 
-    const axisBaseline = {};
-    function sanitizeStickAxis(name, val) {
-      if (axisBaseline[name] === undefined && Math.abs(val) > 0.001) {
-        // If an axis starts at -1.0 (resting trigger on Xbox/Linux drivers), mark it as a trigger!
-        axisBaseline[name] = (val < -0.75) ? "TRIGGER_AXIS" : "STICK_AXIS";
-      }
-      if (axisBaseline[name] === "TRIGGER_AXIS") return 0;
-      return val;
+    function resetCalibration() {
+      baselines = {};
+      ltHoldSeconds = 0;
+      headshotLocked = false;
     }
 
-    window.onNativeAxesEx = function(lx, ly, z, rz, rxAlt, ryAlt, lt, rt, hatX, hatY) {
-      nativeState.active = true;
-      nativeState.lx = lx;
-      nativeState.ly = ly;
+    function readCalibratedStick(key, rawVal) {
+      if (baselines[key] === undefined) {
+        // Record initial resting value. If an axis rests below -0.65, it's a resting trigger axis, NOT a stick!
+        baselines[key] = rawVal;
+      }
+      if (baselines[key] < -0.65) {
+        return 0; // Ignore trigger axes masquerading as stick axes
+      }
+      return rawVal;
+    }
 
-      const cleanZ = sanitizeStickAxis("z", z);
-      const cleanRZ = sanitizeStickAxis("rz", rz);
-      const cleanRX = sanitizeStickAxis("rx", rxAlt);
-      const cleanRY = sanitizeStickAxis("ry", ryAlt);
+    function readCalibratedTrigger(key, rawVal) {
+      if (baselines[key] === undefined) {
+        baselines[key] = rawVal;
+      }
+      const rest = baselines[key];
+      if (rest < -0.5) {
+        // Trigger rests at -1.0 and goes to +1.0 when pressed
+        return Math.max(0, Math.min(1, (rawVal - rest) / 2.0));
+      }
+      // Trigger rests at 0.0 and goes to +1.0 when pressed
+      return Math.max(0, Math.min(1, rawVal - rest));
+    }
 
-      // Pick whichever right-stick axis pair has active deflection
-      if (Math.hypot(cleanRX, cleanRY) > Math.hypot(cleanZ, cleanRZ)) {
-        nativeState.rx = cleanRX;
-        nativeState.ry = cleanRY;
+    // Called directly by MainActivity.java when any stick, trigger, or D-pad moves
+    window.onNativeGamepadAxes = function(lx, ly, z, rz, rxAlt, ryAlt, lTrig, rTrig, brake, gas, hatX, hatY) {
+      pad.lx = lx;
+      pad.ly = ly;
+      pad.hatX = hatX;
+      pad.hatY = hatY;
+
+      const cz  = readCalibratedStick("z", z);
+      const crz = readCalibratedStick("rz", rz);
+      const crx = readCalibratedStick("rx", rxAlt);
+      const cry = readCalibratedStick("ry", ryAlt);
+
+      if (Math.hypot(cz, crz) >= Math.hypot(crx, cry)) {
+        pad.rx = cz;
+        pad.ry = crz;
       } else {
-        nativeState.rx = cleanZ;
-        nativeState.ry = cleanRZ;
+        pad.rx = crx;
+        pad.ry = cry;
       }
 
-      nativeState.lt = lt;
-      nativeState.rt = rt;
-      nativeState.hatX = hatX;
-      nativeState.hatY = hatY;
+      const lt1 = readCalibratedTrigger("lTrig", lTrig);
+      const lt2 = readCalibratedTrigger("brake", brake);
+      const rt1 = readCalibratedTrigger("rTrig", rTrig);
+      const rt2 = readCalibratedTrigger("gas", gas);
+
+      const analogLT = Math.max(lt1, lt2);
+      const analogRT = Math.max(rt1, rt2);
+
+      pad.lt = pad.btnL2Key ? Math.max(analogLT, 1.0) : analogLT;
+      pad.rt = pad.btnR2Key ? Math.max(analogRT, 1.0) : analogRT;
     };
 
     window.onNativeKey = function(keyCode, isDown) {
       switch (keyCode) {
-        case 96:  pad.btnA = isDown; break;
-        case 97:  pad.btnB = isDown; break;
-        case 99:  pad.btnX = isDown; break;
-        case 100: pad.btnY = isDown; break;
-        case 102: pad.btnLB = isDown; break;
-        case 103: pad.btnRB = isDown; break;
-        case 104: nativeState.lt = isDown ? 1.0 : 0.0; break;
-        case 105: nativeState.rt = isDown ? 1.0 : 0.0; break;
-        case 108: pad.btnStart = isDown; break;
+        case 96:  pad.btnA = isDown; break;      // A
+        case 97:  pad.btnB = isDown; break;      // B
+        case 99:  pad.btnX = isDown; break;      // X
+        case 100: pad.btnY = isDown; break;      // Y
+        case 102: pad.btnLB = isDown; break;     // L1 / LB
+        case 103: pad.btnRB = isDown; break;     // R1 / RB
+        case 104:                                // L2 / LT Digital
+          pad.btnL2Key = isDown;
+          pad.lt = isDown ? 1.0 : 0.0;
+          break;
+        case 105:                                // R2 / RT Digital
+          pad.btnR2Key = isDown;
+          pad.rt = isDown ? 1.0 : 0.0;
+          break;
+        case 108: pad.btnStart = isDown; break;  // START
         case 109:
-        case 4:   pad.btnSelect = isDown; break;
-        case 19:  nativeState.hatY = isDown ? -1 : 0; break;
-        case 20:  nativeState.hatY = isDown ? 1 : 0; break;
-        case 21:  nativeState.hatX = isDown ? -1 : 0; break;
-        case 22:  nativeState.hatX = isDown ? 1 : 0; break;
+        case 4:   pad.btnSelect = isDown; break; // SELECT / BACK
+        case 19:  pad.hatY = isDown ? -1 : 0; break;
+        case 20:  pad.hatY = isDown ? 1 : 0; break;
+        case 21:  pad.hatX = isDown ? -1 : 0; break;
+        case 22:  pad.hatX = isDown ? 1 : 0; break;
       }
     };
-
-    function pollControllerInput() {
-      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-      let gp = null;
-      for (let i = 0; i < gamepads.length; i++) {
-        if (gamepads[i] && gamepads[i].connected) {
-          gp = gamepads[i];
-          break;
-        }
-      }
-
-      if (gp) {
-        pad.source = "WebGamepad (" + (gp.mapping || "raw") + ")";
-        pad.lx = gp.axes[0] || 0;
-        pad.ly = gp.axes[1] || 0;
-
-        // Standard Chromium Gamepad mapping places Right Stick on axes[2] and axes[3]
-        let rx = gp.axes[2] || 0;
-        let ry = gp.axes[3] || 0;
-        if (Math.hypot(rx, ry) < 0.05 && Math.hypot(nativeState.rx, nativeState.ry) > 0.1) {
-          rx = nativeState.rx;
-          ry = nativeState.ry;
-        }
-        pad.rx = rx;
-        pad.ry = ry;
-
-        pad.btnA = (gp.buttons[0] && gp.buttons[0].pressed) || false;
-        pad.btnB = (gp.buttons[1] && gp.buttons[1].pressed) || false;
-        pad.btnX = (gp.buttons[2] && gp.buttons[2].pressed) || false;
-        pad.btnY = (gp.buttons[3] && gp.buttons[3].pressed) || false;
-        pad.btnLB = (gp.buttons[4] && gp.buttons[4].pressed) || false;
-        pad.btnRB = (gp.buttons[5] && gp.buttons[5].pressed) || false;
-        pad.lt = Math.max(gp.buttons[6] ? gp.buttons[6].value : 0, nativeState.lt);
-        pad.rt = Math.max(gp.buttons[7] ? gp.buttons[7].value : 0, nativeState.rt);
-        pad.btnSelect = (gp.buttons[8] && gp.buttons[8].pressed) || false;
-        pad.btnStart = (gp.buttons[9] && gp.buttons[9].pressed) || false;
-
-        if (gp.buttons[12] && gp.buttons[12].pressed) pad.hatY = -1;
-        else if (gp.buttons[13] && gp.buttons[13].pressed) pad.hatY = 1;
-        else pad.hatY = nativeState.hatY;
-
-        if (gp.buttons[14] && gp.buttons[14].pressed) pad.hatX = -1;
-        else if (gp.buttons[15] && gp.buttons[15].pressed) pad.hatX = 1;
-        else pad.hatX = nativeState.hatX;
-      } else if (nativeState.active) {
-        pad.source = "Native Android Bridge";
-        pad.lx = nativeState.lx;
-        pad.ly = nativeState.ly;
-        pad.rx = nativeState.rx;
-        pad.ry = nativeState.ry;
-        pad.lt = nativeState.lt;
-        pad.rt = nativeState.rt;
-        pad.hatX = nativeState.hatX;
-        pad.hatY = nativeState.hatY;
-      }
-    }
 
     // Synthetic Keyboard Dispatcher for Ruffle
     const KEY_MAP = {
@@ -601,35 +577,88 @@
       };
       window.dispatchEvent(new KeyboardEvent(type, evtInit));
       document.dispatchEvent(new KeyboardEvent(type, evtInit));
+      const canvas = getActiveRuffleCanvas();
       if (rufflePlayer) rufflePlayer.dispatchEvent(new KeyboardEvent(type, evtInit));
-      if (ruffleCanvas) ruffleCanvas.dispatchEvent(new KeyboardEvent(type, evtInit));
+      if (canvas) canvas.dispatchEvent(new KeyboardEvent(type, evtInit));
     }
 
-    function dispatchRuffleMouse(type, x, y, isDown) {
-      const target = ruffleCanvas || rufflePlayer || document.body;
-      const mouseInit = {
-        clientX: x,
-        clientY: y,
-        screenX: x,
-        screenY: y,
+    /*
+     * Dual-Layer Mouse Dispatcher:
+     * 1. Calls Native Android OS MotionEvent Bridge (ThorInputBridge.sendMouse)
+     * 2. Dispatches Primary PointerEvent + MouseEvent with explicit offsetX/offsetY onto Ruffle's inner <canvas>
+     */
+    let lastSentX = -1;
+    let lastSentY = -1;
+    let lastSentDown = false;
+
+    function syncStageMouse(x, y, isDown) {
+      const moved = (Math.abs(x - lastSentX) > 0.4) || (Math.abs(y - lastSentY) > 0.4);
+      const clickChanged = (isDown !== lastSentDown);
+
+      // 1. Native Android OS Mouse Injection (Trusted Hardware MotionEvent)
+      if (window.ThorInputBridge && (moved || clickChanged || isDown)) {
+        window.ThorInputBridge.sendMouse(x, y, isDown);
+      }
+
+      // 2. Direct Shadow-DOM <canvas> Primary PointerEvent Injection
+      const canvas = getActiveRuffleCanvas();
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const offX = x - rect.left;
+        const offY = y - rect.top;
+
+        if (moved) {
+          fireCanvasPointer(canvas, "pointermove", "mousemove", x, y, offX, offY, isDown);
+        }
+        if (clickChanged) {
+          if (isDown) {
+            fireCanvasPointer(canvas, "pointerdown", "mousedown", x, y, offX, offY, true);
+          } else {
+            fireCanvasPointer(canvas, "pointerup", "mouseup", x, y, offX, offY, false);
+          }
+        }
+      }
+
+      lastSentX = x;
+      lastSentY = y;
+      lastSentDown = isDown;
+    }
+
+    function fireCanvasPointer(canvas, ptrType, mouseType, clientX, clientY, offsetX, offsetY, isDown) {
+      const init = {
+        view: window,
+        clientX: clientX,
+        clientY: clientY,
+        screenX: clientX,
+        screenY: clientY,
         button: 0,
         buttons: isDown ? 1 : 0,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
         bubbles: true,
         cancelable: true,
         composed: true
       };
-      target.dispatchEvent(new PointerEvent(type.replace("mouse", "pointer"), mouseInit));
-      target.dispatchEvent(new MouseEvent(type, mouseInit));
+
+      const pEvt = new PointerEvent(ptrType, init);
+      Object.defineProperty(pEvt, "offsetX", { get: () => offsetX });
+      Object.defineProperty(pEvt, "offsetY", { get: () => offsetY });
+      canvas.dispatchEvent(pEvt);
+
+      const mEvt = new MouseEvent(mouseType, init);
+      Object.defineProperty(mEvt, "offsetX", { get: () => offsetX });
+      Object.defineProperty(mEvt, "offsetY", { get: () => offsetY });
+      canvas.dispatchEvent(mEvt);
     }
 
-    // Progressive Angular Interpolation Helper
+    // Progressive Angular Interpolation
     function rotateAngleProgressively(currentRad, targetRad, normDeflection, dt, dampingMult) {
       let diff = targetRad - currentRad;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
 
-      // Exponential progressive curve: gentle tilt = slow precision, full tilt = fast snap
-      const progressiveCurve = Math.pow(normDeflection, 1.75);
+      const progressiveCurve = Math.pow(normDeflection, 1.65);
       const maxStepRad = (maxTurnSpeedDeg * Math.PI / 180) * progressiveCurve * dampingMult * dt;
 
       if (Math.abs(diff) <= maxStepRad) {
@@ -638,23 +667,46 @@
       return currentRad + Math.sign(diff) * maxStepRad;
     }
 
-    // Project Angle to Screen Coordinates (Long-baseline projection guarantees right/left side fidelity)
-    function projectAngleToStage(anchorX, anchorY, angleRad) {
-      const rx = window.innerWidth * 0.44;
-      const ry = window.innerHeight * 0.42;
+    // Stage-Boundary Projection (Ensures aiming right/left reaches the actual edge of the 4:3 Ruffle canvas)
+    function getStageBounds() {
+      const canvas = getActiveRuffleCanvas();
+      if (canvas) {
+        const r = canvas.getBoundingClientRect();
+        if (r.width > 100 && r.height > 100) return r;
+      }
       return {
-        x: Math.max(16, Math.min(window.innerWidth - 16, anchorX + Math.cos(angleRad) * rx)),
-        y: Math.max(16, Math.min(window.innerHeight - 16, anchorY + gunShoulderOffset + Math.sin(angleRad) * ry))
+        left: 0,
+        top: 0,
+        width: window.innerWidth,
+        height: window.innerHeight
       };
     }
 
-    function computeHeadshotLockPos(anchorX, anchorY, angleRad) {
-      const facingRight = Math.cos(angleRad) >= 0;
-      const dirSign = facingRight ? 1 : -1;
-      const rx = window.innerWidth * 0.44;
+    function projectAngleToStage(angleRad) {
+      const rect = getStageBounds();
+      const cx = rect.left + rect.width * 0.5;
+      const cy = rect.top + rect.height * 0.52 + gunShoulderOffset;
+      const rx = rect.width * 0.46;
+      const ry = rect.height * 0.44;
       return {
-        x: anchorX + dirSign * rx,
-        y: anchorY + headshotPlaneOffset
+        anchorX: cx,
+        anchorY: rect.top + rect.height * 0.52,
+        x: Math.max(rect.left + 12, Math.min(rect.left + rect.width - 12, cx + Math.cos(angleRad) * rx)),
+        y: Math.max(rect.top + 12, Math.min(rect.top + rect.height - 12, cy + Math.sin(angleRad) * ry))
+      };
+    }
+
+    function computeHeadshotLockPos(angleRad) {
+      const rect = getStageBounds();
+      const cx = rect.left + rect.width * 0.5;
+      const cy = rect.top + rect.height * 0.52;
+      const dirSign = (Math.cos(angleRad) >= 0) ? 1 : -1;
+      const rx = rect.width * 0.46;
+      return {
+        anchorX: cx,
+        anchorY: cy,
+        x: cx + dirSign * rx,
+        y: cy + headshotPlaneOffset
       };
     }
 
@@ -710,13 +762,10 @@
       const dt = Math.min(0.1, (now - lastTime) / 1000);
       lastTime = now;
 
-      pollControllerInput();
-
-      // Update live diagnostics in submenu
       if (submenuOpen) {
         const tel = document.getElementById("stick-telemetry");
         if (tel) {
-          tel.textContent = `Source: ${pad.source} | LS:(${pad.lx.toFixed(2)}, ${pad.ly.toFixed(2)}) | RS:(${pad.rx.toFixed(2)}, ${pad.ry.toFixed(2)}) | LT:${pad.lt.toFixed(2)} RT:${pad.rt.toFixed(2)} | Facing:${travelDir > 0 ? "RIGHT" : "LEFT"}`;
+          tel.textContent = `LS:(${pad.lx.toFixed(2)}, ${pad.ly.toFixed(2)}) | RS:(${pad.rx.toFixed(2)}, ${pad.ry.toFixed(2)}) | LT:${pad.lt.toFixed(2)} RT:${pad.rt.toFixed(2)} | Facing:${travelDir > 0 ? "RIGHT" : "LEFT"}`;
         }
       }
 
@@ -728,9 +777,7 @@
       }
 
       if (!submenuOpen) {
-        const anchorX = window.innerWidth * 0.5;
-        const anchorY = window.innerHeight * 0.52;
-        const ltActive = pad.lt > 0.25;
+        const ltActive = pad.lt > 0.30;
 
         // 1. Left Stick & D-Pad Movement + Direction of Travel Tracking
         const moveLeft  = (pad.lx < -stickDeadzone) || (pad.hatX < -0.5);
@@ -738,7 +785,6 @@
         const moveDown  = (pad.ly >  0.48) || (pad.hatY >  0.5);
         const moveUp    = (pad.ly < -0.58) || (pad.hatY < -0.5);
 
-        // Update soldier's direction of travel whenever moving horizontally
         if (moveRight && !moveLeft) travelDir = 1;
         else if (moveLeft && !moveRight) travelDir = -1;
 
@@ -755,9 +801,12 @@
         // 2. Aiming System Calculation
         const rMag = Math.hypot(pad.rx, pad.ry);
         const lMag = Math.hypot(pad.lx, pad.ly);
+        const stageRect = getStageBounds();
+        let anchorX = stageRect.left + stageRect.width * 0.5;
+        let anchorY = stageRect.top + stageRect.height * 0.52;
 
         if (controlMode === 2) {
-          // MODE 2: FREE MENU CURSOR (For Loadouts, Campaign Map & Slot Machine)
+          // MODE 2: FREE MENU CURSOR
           ltHoldSeconds = 0;
           headshotLocked = false;
           const activeX = (rMag > stickDeadzone) ? pad.rx : ((lMag > stickDeadzone) ? pad.lx : 0);
@@ -768,16 +817,13 @@
             const norm = (activeMag - stickDeadzone) / (1 - stickDeadzone);
             const curve = Math.pow(norm, 1.5);
             const speed = (ltActive ? 320 : 820) * curve * dt;
-            const unitX = activeX / activeMag;
-            const unitY = activeY / activeMag;
-            cursorX = Math.max(12, Math.min(window.innerWidth - 12, cursorX + unitX * speed));
-            cursorY = Math.max(12, Math.min(window.innerHeight - 12, cursorY + unitY * speed));
+            cursorX = Math.max(10, Math.min(window.innerWidth - 10, cursorX + (activeX / activeMag) * speed));
+            cursorY = Math.max(10, Math.min(window.innerHeight - 10, cursorY + (activeY / activeMag) * speed));
           }
         } else if (controlMode === 0) {
           // MODE 0: METROID DREAD STYLE AIMING
           if (ltActive) {
             ltHoldSeconds += dt;
-            // In Dread Mode, LT Laser can be steered with Right Stick (or Left Stick if Right Stick is neutral)
             let stickX = pad.rx, stickY = pad.ry, mag = rMag;
             if (rMag <= stickDeadzone && lMag > stickDeadzone) {
               stickX = pad.lx;
@@ -793,23 +839,20 @@
                 aimAngle = rotateAngleProgressively(aimAngle, targetAngle, norm, dt, 0.75);
                 travelDir = (Math.cos(aimAngle) >= 0) ? 1 : -1;
               }
-              const pos = projectAngleToStage(anchorX, anchorY, aimAngle);
-              cursorX = pos.x;
-              cursorY = pos.y;
+              const pos = projectAngleToStage(aimAngle);
+              anchorX = pos.anchorX; anchorY = pos.anchorY;
+              cursorX = pos.x; cursorY = pos.y;
             } else {
-              // 1.0s+ LT Hold -> Engage Headshot Plane Lock
               headshotLocked = true;
-              if (mag > 0.65) {
+              if (mag > 0.55) {
                 travelDir = (stickX >= 0) ? 1 : -1;
               }
               aimAngle = (travelDir > 0) ? 0 : Math.PI;
-              const lockPos = computeHeadshotLockPos(anchorX, anchorY, aimAngle);
-              cursorX = lockPos.x;
-              cursorY = lockPos.y;
+              const lockPos = computeHeadshotLockPos(aimAngle);
+              anchorX = lockPos.anchorX; anchorY = lockPos.anchorY;
+              cursorX = lockPos.x; cursorY = lockPos.y;
             }
           } else {
-            // LT Released in Dread Mode:
-            // If Right Stick is deflected, allow progressive sweep; otherwise ZERO straight ahead in travelDir!
             ltHoldSeconds = 0;
             headshotLocked = false;
             if (rMag > stickDeadzone) {
@@ -821,9 +864,9 @@
               // Auto-Zero directly in front of the soldier's direction of travel!
               aimAngle = (travelDir > 0) ? 0 : Math.PI;
             }
-            const pos = projectAngleToStage(anchorX, anchorY, aimAngle);
-            cursorX = pos.x;
-            cursorY = pos.y;
+            const pos = projectAngleToStage(aimAngle);
+            anchorX = pos.anchorX; anchorY = pos.anchorY;
+            cursorX = pos.x; cursorY = pos.y;
           }
         } else {
           // MODE 1: TWIN-STICK PROGRESSIVE + AUTO-ZERO ON STICK RELEASE
@@ -837,18 +880,18 @@
                 aimAngle = rotateAngleProgressively(aimAngle, targetAngle, norm, dt, 0.55);
                 travelDir = (Math.cos(aimAngle) >= 0) ? 1 : -1;
               }
-              const pos = projectAngleToStage(anchorX, anchorY, aimAngle);
-              cursorX = pos.x;
-              cursorY = pos.y;
+              const pos = projectAngleToStage(aimAngle);
+              anchorX = pos.anchorX; anchorY = pos.anchorY;
+              cursorX = pos.x; cursorY = pos.y;
             } else {
               headshotLocked = true;
-              if (rMag > 0.65) {
+              if (rMag > 0.55) {
                 travelDir = (pad.rx >= 0) ? 1 : -1;
               }
               aimAngle = (travelDir > 0) ? 0 : Math.PI;
-              const lockPos = computeHeadshotLockPos(anchorX, anchorY, aimAngle);
-              cursorX = lockPos.x;
-              cursorY = lockPos.y;
+              const lockPos = computeHeadshotLockPos(aimAngle);
+              anchorX = lockPos.anchorX; anchorY = lockPos.anchorY;
+              cursorX = lockPos.x; cursorY = lockPos.y;
             }
           } else {
             ltHoldSeconds = 0;
@@ -859,26 +902,17 @@
               aimAngle = rotateAngleProgressively(aimAngle, targetAngle, norm, dt, 1.0);
               travelDir = (Math.cos(aimAngle) >= 0) ? 1 : -1;
             } else {
-              // No stick input -> Zero aim straight ahead in direction of travel
               aimAngle = (travelDir > 0) ? 0 : Math.PI;
             }
-            const pos = projectAngleToStage(anchorX, anchorY, aimAngle);
-            cursorX = pos.x;
-            cursorY = pos.y;
+            const pos = projectAngleToStage(aimAngle);
+            anchorX = pos.anchorX; anchorY = pos.anchorY;
+            cursorX = pos.x; cursorY = pos.y;
           }
         }
 
-        // 3. Dispatch Mouse Coordinates & Right Trigger (RT) Fire
+        // 3. Inject Hardware Mouse Coordinates & RT Fire into Ruffle Stage
         const wantFire = (pad.rt > 0.30) || (controlMode === 2 && pad.btnA);
-        dispatchRuffleMouse("mousemove", cursorX, cursorY, wantFire);
-
-        if (wantFire && !isFiring) {
-          isFiring = true;
-          dispatchRuffleMouse("mousedown", cursorX, cursorY, true);
-        } else if (!wantFire && isFiring) {
-          isFiring = false;
-          dispatchRuffleMouse("mouseup", cursorX, cursorY, false);
-        }
+        syncStageMouse(cursorX, cursorY, wantFire);
 
         // 4. Render Metroid Dread Laser / Tactical Reticle HUD
         renderHud(anchorX, anchorY, ltActive, rMag > stickDeadzone);
@@ -891,7 +925,6 @@
     function renderHud(anchorX, anchorY, ltActive, rightStickActive) {
       ctx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
 
-      // Draw Metroid Dread Laser Sight when LT is held (or faint directional sight when aiming)
       if (controlMode !== 2 && (ltActive || rightStickActive)) {
         ctx.save();
         ctx.beginPath();
@@ -914,7 +947,6 @@
         ctx.restore();
       }
 
-      // Draw 1.0-Second LT Headshot Lock Charge Ring
       if (controlMode !== 2 && ltActive) {
         const progress = Math.min(1.0, ltHoldSeconds / 1.0);
         const ringRadius = 34 - progress * 20;
@@ -928,7 +960,6 @@
         ctx.restore();
       }
 
-      // Draw Reticle
       ctx.save();
       ctx.translate(cursorX, cursorY);
 
