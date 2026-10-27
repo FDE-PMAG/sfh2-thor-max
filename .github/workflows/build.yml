@@ -37,10 +37,8 @@ jobs:
           mkdir -p app/src/main/assets/ruffle
           mkdir -p app/src/main/res/values
 
-          # Copy index.html into Android assets
           cp index.html app/src/main/assets/index.html
 
-          # Automatically find any uploaded .swf file and copy as sfh2.swf
           SWF_FILE=$(find . -maxdepth 2 -iname "*.swf" | head -n 1)
           if [ -z "$SWF_FILE" ]; then
             echo "ERROR: No .swf file found in repository! Please upload sfh2.swf."
@@ -48,12 +46,10 @@ jobs:
           fi
           cp "$SWF_FILE" app/src/main/assets/sfh2.swf
 
-          # Download latest self-hosted Ruffle WebAssembly package for 100% offline play
           npm pack @ruffle-rs/ruffle
           tar -xzf ruffle-rs-ruffle-*.tgz
           cp -r package/* app/src/main/assets/ruffle/
 
-          # Write settings.gradle
           cat << 'EOF' > settings.gradle
           pluginManagement {
               repositories {
@@ -73,20 +69,17 @@ jobs:
           include ':app'
           EOF
 
-          # Write root build.gradle
           cat << 'EOF' > build.gradle
           plugins {
               id 'com.android.application' version '8.3.2' apply false
           }
           EOF
 
-          # Write gradle.properties
           cat << 'EOF' > gradle.properties
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           EOF
 
-          # Write app/build.gradle
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -100,8 +93,8 @@ jobs:
                   applicationId "com.sfh2.thormax"
                   minSdk 26
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0-ThorMax"
+                  versionCode 2
+                  versionName "1.1-ThorMax-Dread"
               }
 
               buildTypes {
@@ -121,7 +114,6 @@ jobs:
           }
           EOF
 
-          # Write AndroidManifest.xml (Landscape Locked, Game Category, Hardware Accelerated)
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -151,7 +143,6 @@ jobs:
           </manifest>
           EOF
 
-          # Write MainActivity.java (WebViewAssetLoader + Xbox Controller Native Bridge)
           cat << 'EOF' > app/src/main/java/com/sfh2/thormax/MainActivity.java
           package com.sfh2.thormax;
 
@@ -230,6 +221,12 @@ jobs:
                   if (hasFocus) hideSystemBars();
               }
 
+              private float normalizeTrigger(MotionEvent event, int primaryAxis, int fallbackAxis) {
+                  float v1 = event.getAxisValue(primaryAxis);
+                  float v2 = event.getAxisValue(fallbackAxis);
+                  return Math.max(Math.max(0f, v1), Math.max(0f, v2));
+              }
+
               @Override
               public boolean dispatchGenericMotionEvent(MotionEvent event) {
                   int src = event.getSource();
@@ -237,21 +234,21 @@ jobs:
                           || (src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD) {
                       float lx = event.getAxisValue(MotionEvent.AXIS_X);
                       float ly = event.getAxisValue(MotionEvent.AXIS_Y);
-                      float rx = event.getAxisValue(MotionEvent.AXIS_Z);
-                      float ry = event.getAxisValue(MotionEvent.AXIS_RZ);
-                      float lt = Math.max(event.getAxisValue(MotionEvent.AXIS_LTRIGGER),
-                                          event.getAxisValue(MotionEvent.AXIS_BRAKE));
-                      float rt = Math.max(event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
-                                          event.getAxisValue(MotionEvent.AXIS_GAS));
+                      float z  = event.getAxisValue(MotionEvent.AXIS_Z);
+                      float rz = event.getAxisValue(MotionEvent.AXIS_RZ);
+                      float rxAlt = event.getAxisValue(MotionEvent.AXIS_RX);
+                      float ryAlt = event.getAxisValue(MotionEvent.AXIS_RY);
+                      float lt = normalizeTrigger(event, MotionEvent.AXIS_LTRIGGER, MotionEvent.AXIS_BRAKE);
+                      float rt = normalizeTrigger(event, MotionEvent.AXIS_RTRIGGER, MotionEvent.AXIS_GAS);
                       float hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X);
                       float hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y);
 
                       String js = String.format(Locale.US,
-                              "if(window.onNativeAxes)window.onNativeAxes(%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f);",
-                              lx, ly, rx, ry, lt, rt, hatX, hatY);
+                              "if(window.onNativeAxesEx)window.onNativeAxesEx(%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f);",
+                              lx, ly, z, rz, rxAlt, ryAlt, lt, rt, hatX, hatY);
                       webView.evaluateJavascript(js, null);
-                      return true;
                   }
+                  // Pass event through to WebView so Chromium's native Gamepad API also receives it
                   return super.dispatchGenericMotionEvent(event);
               }
 
@@ -273,14 +270,16 @@ jobs:
                                   null
                           );
                       }
-                      return true;
+                      if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_BUTTON_B) {
+                          return true;
+                      }
                   }
                   return super.dispatchKeyEvent(event);
               }
 
               @Override
               public void onBackPressed() {
-                  // Prevent Android Back from accidentally closing the game mid-match
+                  // Prevent Android Back from closing the app
               }
           }
           EOF
@@ -299,6 +298,6 @@ jobs:
       - name: 8. Publish Direct Download Link to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
+          tag_name: v1.1.${{ github.run_number }}
           name: "Strike Force Heroes 2 - Thor Max APK (Build #${{ github.run_number }})"
           files: StrikeForceHeroes2-ThorMax.apk
