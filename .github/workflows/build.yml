@@ -36,10 +36,10 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: 5. Auto-Recover Valid SWF from Git History, Decompile & Patch AS3
+      - name: 5. Recover Intact SWF & Compile Native Aiming into Aimer.as & MenuButton.as
         run: |
           cat << 'EOF' > recover_swf.py
-          import os, glob, struct, subprocess, zlib
+          import glob, struct, subprocess, zlib
 
           def check_swf_bytes(data, label=""):
               if len(data) < 5000000:
@@ -49,61 +49,40 @@ jobs:
                   return False, f"{label}: Invalid signature ({sig!r})"
               ver = data[3]
               declared_len = struct.unpack("<I", data[4:8])[0]
-              if sig == b"FWS":
-                  # Uncompressed FWS must match declared header length ( prevents UTF-8 corruption )
-                  if abs(len(data) - declared_len) > 128:
-                      return False, f"{label}: UTF-8 corrupted! Actual={len(data)} vs Header={declared_len}"
-              elif sig == b"CWS":
-                  try:
-                      decomp = zlib.decompress(data[8:])
-                      if abs(len(decomp) + 8 - declared_len) > 128:
-                          return False, f"{label}: CWS length mismatch"
-                  except Exception as e:
-                      return False, f"{label}: CWS zlib error {e}"
-              return True, f"{label}: VALID {sig.decode()} v{ver} ({len(data)} bytes, header={declared_len})"
+              if sig == b"FWS" and abs(len(data) - declared_len) > 128:
+                  return False, f"{label}: UTF-8 corrupted"
+              return True, f"{label}: VALID {sig.decode()} v{ver} ({len(data)} bytes)"
 
-          log_lines = []
           valid_swf_data = None
-
-          # 1. Check current working tree .swf files first
           for f in sorted(glob.glob("**/*.swf", recursive=True)):
               with open(f, "rb") as fp:
                   d = fp.read()
-              ok, msg = check_swf_bytes(d, f"WorkingTree({f})")
-              log_lines.append(msg)
-              if ok and valid_swf_data is None:
+              ok, _ = check_swf_bytes(d, f)
+              if ok:
                   valid_swf_data = d
+                  break
 
-          # 2. If working tree SWF was corrupted by rename, scan all Git history commits!
           if valid_swf_data is None:
-              log_lines.append("Working tree SWF is invalid/corrupted. Scanning Git commit history...")
               commits = subprocess.check_output(["git", "rev-list", "--all"]).decode().splitlines()
               for c in commits:
                   tree = subprocess.check_output(["git", "ls-tree", "-r", c]).decode().splitlines()
                   for line in tree:
                       if line.lower().endswith(".swf"):
-                          parts = line.split()
-                          blob_hash = parts[2]
-                          fname = parts[-1]
+                          blob_hash = line.split()[2]
                           d = subprocess.check_output(["git", "cat-file", "blob", blob_hash])
-                          ok, msg = check_swf_bytes(d, f"GitCommit({c[:7]}:{fname})")
-                          log_lines.append(msg)
+                          ok, msg = check_swf_bytes(d, f"Commit({c[:7]})")
                           if ok:
+                              print("Recovered SWF from:", msg)
                               valid_swf_data = d
                               break
                   if valid_swf_data is not None:
                       break
 
-          with open("swf_recovery.log", "w", encoding="utf-8") as lf:
-              lf.write("\n".join(log_lines) + "\n")
-          print("\n".join(log_lines))
-
           if valid_swf_data is None:
-              raise SystemExit("FATAL: Could not find a valid uncorrupted .swf in working tree or Git history!")
+              raise SystemExit("FATAL: Could not find a valid .swf!")
 
           with open("working_sfh2.swf", "wb") as out_swf:
               out_swf.write(valid_swf_data)
-          print(f"Saved intact working_sfh2.swf ({len(valid_swf_data)} bytes)")
           EOF
           python3 recover_swf.py
 
@@ -115,93 +94,413 @@ jobs:
           curl -fL -s -o ffdec.zip "$FFDEC_URL"
           unzip -q ffdec.zip -d ffdec_cli
 
-          mkdir -p decompiled_as3
-          # Try batch selectclass first
+          # Write the clean, self-contained Native AS3 Aimer.as replacement
+          cat << 'EOF' > CustomAimer.as
+          package
+          {
+             import flash.display.MovieClip;
+             import flash.external.ExternalInterface;
+             import flash.geom.Point;
+             import flash.utils.getDefinitionByName;
+             
+             public dynamic class Aimer extends MovieClip
+             {
+                public var line1:MovieClip;
+                public var line2:MovieClip;
+                public var circle:MovieClip;
+                public var line3:MovieClip;
+                public var line4:MovieClip;
+                
+                private var curAngle:Number = 0;
+                private var lastDir:int = 1;
+                private var wasRtDown:Boolean = false;
+                private var lockedUnit:* = null;
+                
+                public static var sandboxApplied:Boolean = false;
+                public static var vaultSaved:Boolean = false;
+                public static var vaultLevels:Array = [0,1,1,1,1,1];
+                public static var vaultFunds:Array = [0,0,0,0,0,0];
+                public static var vaultCamos:Array = [0,5,5,5,5,5];
+                public static var vaultCamp:Array = null;
+                public static var vaultChal:Array = null;
+                public static var vaultAch:Array = null;
+                
+                public function Aimer()
+                {
+                   super();
+                }
+                
+                public static function syncSandbox(wantSandbox:Boolean) : void
+                {
+                   try
+                   {
+                      if(wantSandbox == sandboxApplied)
+                      {
+                         return;
+                      }
+                      var sd:* = getDefinitionByName("SD");
+                      var shop:* = getDefinitionByName("Shop");
+                      var mainCls:* = getDefinitionByName("Main");
+                      var i:int = 1;
+                      if(wantSandbox)
+                      {
+                         if(!vaultSaved)
+                         {
+                            i = 1;
+                            while(i <= 5)
+                            {
+                               vaultLevels[i] = sd.classSaves[i].level;
+                               vaultFunds[i] = sd.classSaves[i].funds;
+                               vaultCamos[i] = sd.classSaves[i].unlockCamo;
+                               i++;
+                            }
+                            vaultCamp = sd.completeCamp.concat();
+                            vaultChal = sd.completeChal.concat();
+                            vaultAch = sd.achievements.concat();
+                            vaultSaved = true;
+                         }
+                         i = 1;
+                         while(i <= 5)
+                         {
+                            sd.classSaves[i].level = 50;
+                            sd.classSaves[i].funds = 999999;
+                            sd.classSaves[i].unlockCamo = 20;
+                            i++;
+                         }
+                         sd.completeCamp = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1];
+                         sd.completeChal = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1];
+                         sd.achievements = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20];
+                         shop.resetShops();
+                         sandboxApplied = true;
+                      }
+                      else
+                      {
+                         if(vaultSaved)
+                         {
+                            i = 1;
+                            while(i <= 5)
+                            {
+                               sd.classSaves[i].level = vaultLevels[i];
+                               sd.classSaves[i].funds = vaultFunds[i];
+                               sd.classSaves[i].unlockCamo = vaultCamos[i];
+                               i++;
+                            }
+                            sd.completeCamp = vaultCamp.concat();
+                            sd.completeChal = vaultChal.concat();
+                            sd.achievements = vaultAch.concat();
+                            shop.resetShops();
+                            sd.saveGame();
+                         }
+                         sandboxApplied = false;
+                      }
+                      if(mainCls.curClass != null && mainCls.curClass.hasOwnProperty("Init"))
+                      {
+                         mainCls.curClass.Init();
+                      }
+                   }
+                   catch(err:*)
+                   {
+                   }
+                }
+                
+                override public function set y(param1:Number) : void
+                {
+                   var g:* = this.parent;
+                   if(g == null || g.player == null || Boolean(g.player.dead) || Boolean(g.paused) || param1 <= -500)
+                   {
+                      if(this.wasRtDown && g != null && g.player != null)
+                      {
+                         this.wasRtDown = false;
+                         g.player.MouseUp();
+                      }
+                      super.y = param1;
+                      return;
+                   }
+                   this.thorUpdateAim(g, g.player, param1);
+                }
+                
+                private function thorUpdateAim(g:*, p:*, origY:Number) : void
+                {
+                   try
+                   {
+                      if(!ExternalInterface.available)
+                      {
+                         super.y = origY;
+                         return;
+                      }
+                      if(g.arena != null)
+                      {
+                         g.arena.useAim = false;
+                      }
+                      if((p.keys & 8) != 0 && (p.keys & 4) == 0)
+                      {
+                         this.lastDir = 1;
+                      }
+                      else if((p.keys & 4) != 0 && (p.keys & 8) == 0)
+                      {
+                         this.lastDir = -1;
+                      }
+                      var shX:Number = p.x + p.MC.arm1.x + p.MC.rotation * 1.2;
+                      var shY:Number = p.y + p.MC.arm1.y;
+                      var raw:String = ExternalInterface.call("thorPollPad", shX + g.arena.x, shY + g.arena.y, this.lastDir);
+                      if(raw == null || raw == "")
+                      {
+                         super.y = origY;
+                         return;
+                      }
+                      var parts:Array = raw.split(",");
+                      var rx:Number = Number(parts[0]);
+                      var ry:Number = Number(parts[1]);
+                      var normMag:Number = Number(parts[2]);
+                      var ltActive:Boolean = (parts[3] == "1");
+                      var ltProg:Number = Number(parts[4]);
+                      var ltLocked:Boolean = (parts[5] == "1");
+                      var rtDown:Boolean = (parts[6] == "1");
+                      var wantSandbox:Boolean = (parts[7] == "1");
+                      var speedMult:Number = Number(parts[8]);
+                      
+                      if(wantSandbox != sandboxApplied)
+                      {
+                         syncSandbox(wantSandbox);
+                      }
+                      
+                      if(ltLocked)
+                      {
+                         if(this.lockedUnit != null)
+                         {
+                            if(Boolean(this.lockedUnit.dead) || !this.lockedUnit.visible || Boolean(this.lockedUnit.status.sSpawn) || (this.lockedUnit.team != 0 && this.lockedUnit.team == p.team))
+                            {
+                               this.lockedUnit = null;
+                            }
+                         }
+                         if(this.lockedUnit == null || normMag > 0.78)
+                         {
+                            var bestScore:Number = 999999;
+                            var bestU:* = null;
+                            var uLen:int = g.units.length;
+                            var ui:int = 0;
+                            var refAngle:Number = (normMag > 0.35) ? Math.atan2(ry, rx) : this.curAngle;
+                            while(ui < uLen)
+                            {
+                               var u:* = g.units[ui];
+                               if(u != null && u != p && !Boolean(u.dead) && u.visible && !Boolean(u.status.sSpawn) && (u.team == 0 || u.team != p.team))
+                               {
+                                  var dx:Number = u.x - shX;
+                                  var dy:Number = (u.y - 36) - shY;
+                                  var dist:Number = Math.sqrt(dx * dx + dy * dy);
+                                  if(dist < 900)
+                                  {
+                                     var uAng:Number = Math.atan2(dy, dx);
+                                     var aDiff:Number = uAng - refAngle;
+                                     while(aDiff > 3.14159265)
+                                     {
+                                        aDiff -= 6.2831853;
+                                     }
+                                     while(aDiff < -3.14159265)
+                                     {
+                                        aDiff += 6.2831853;
+                                     }
+                                     var sc:Number = dist + Math.abs(aDiff) * 160;
+                                     if(sc < bestScore)
+                                     {
+                                        bestScore = sc;
+                                        bestU = u;
+                                     }
+                                  }
+                               }
+                               ui++;
+                            }
+                            if(bestU != null)
+                            {
+                               this.lockedUnit = bestU;
+                            }
+                         }
+                         if(this.lockedUnit != null)
+                         {
+                            var headPt:Point = new Point(this.lockedUnit.x, this.lockedUnit.y - 38 * this.lockedUnit.scale);
+                            if(this.lockedUnit.MC != null && this.lockedUnit.MC.head != null)
+                            {
+                               headPt = g.unitCont.globalToLocal(this.lockedUnit.MC.head.localToGlobal(new Point(0, -6)));
+                            }
+                            p.aimX = headPt.x;
+                            p.aimY = headPt.y;
+                            this.curAngle = Math.atan2(p.aimY - shY, p.aimX - shX);
+                            this.lastDir = (p.aimX >= shX) ? 1 : -1;
+                         }
+                         else
+                         {
+                            if(normMag > 0.25)
+                            {
+                               this.lastDir = (rx >= 0) ? 1 : -1;
+                            }
+                            this.curAngle = (this.lastDir >= 0) ? 0 : 3.14159265;
+                            p.aimX = shX + this.lastDir * 200;
+                            p.aimY = shY - 8;
+                         }
+                      }
+                      else
+                      {
+                         this.lockedUnit = null;
+                         if(normMag > 0.001)
+                         {
+                            if(Math.abs(rx) > 0.12)
+                            {
+                               var stickSide:int = (rx >= 0) ? 1 : -1;
+                               if(stickSide != this.lastDir)
+                               {
+                                  this.lastDir = stickSide;
+                                  this.curAngle = Math.atan2(Math.sin(this.curAngle), Math.abs(Math.cos(this.curAngle)) * stickSide);
+                               }
+                            }
+                            var targetAng:Number = Math.atan2(ry, rx);
+                            var diffAng:Number = targetAng - this.curAngle;
+                            while(diffAng > 3.14159265)
+                            {
+                               diffAng -= 6.2831853;
+                            }
+                            while(diffAng < -3.14159265)
+                            {
+                               diffAng += 6.2831853;
+                            }
+                            var stepRad:Number = (0.035 + 0.58 * (normMag * normMag)) * speedMult;
+                            if(ltActive)
+                            {
+                               stepRad *= 0.28;
+                            }
+                            if(Math.abs(diffAng) <= stepRad)
+                            {
+                               this.curAngle = targetAng;
+                            }
+                            else
+                            {
+                               this.curAngle += (diffAng > 0) ? stepRad : -stepRad;
+                            }
+                            this.lastDir = (Math.cos(this.curAngle) >= 0) ? 1 : -1;
+                            var rad:Number = ltActive ? 210 : 165;
+                            p.aimX = shX + Math.cos(this.curAngle) * rad;
+                            p.aimY = shY + Math.sin(this.curAngle) * rad;
+                         }
+                         else
+                         {
+                            if(ltActive)
+                            {
+                               p.aimX = shX + Math.cos(this.curAngle) * 210;
+                               p.aimY = shY + Math.sin(this.curAngle) * 210;
+                            }
+                            else
+                            {
+                               this.curAngle = (this.lastDir >= 0) ? 0 : 3.14159265;
+                               p.aimX = shX + this.lastDir * 135;
+                               p.aimY = shY;
+                            }
+                         }
+                      }
+                      
+                      super.x = p.aimX + g.arena.x;
+                      super.y = p.aimY + g.arena.y;
+                      
+                      if(g.lineCont != null)
+                      {
+                         if(ltLocked)
+                         {
+                            g.lineCont.graphics.lineStyle(2.5, 16723502, 0.92);
+                            g.lineCont.graphics.moveTo(shX, shY);
+                            g.lineCont.graphics.lineTo(p.aimX, p.aimY);
+                            g.lineCont.graphics.drawCircle(p.aimX, p.aimY, 9);
+                            g.lineCont.graphics.lineStyle();
+                         }
+                         else if(ltActive)
+                         {
+                            g.lineCont.graphics.lineStyle(1.8, 16766474, 0.78);
+                            g.lineCont.graphics.moveTo(shX, shY);
+                            g.lineCont.graphics.lineTo(p.aimX, p.aimY);
+                            g.lineCont.graphics.drawCircle(p.aimX, p.aimY, 26 - 17 * ltProg);
+                            g.lineCont.graphics.lineStyle();
+                         }
+                         else if(normMag > 0.001)
+                         {
+                            g.lineCont.graphics.lineStyle(1.2, 62932, 0.35);
+                            g.lineCont.graphics.moveTo(shX, shY);
+                            g.lineCont.graphics.lineTo(p.aimX, p.aimY);
+                            g.lineCont.graphics.lineStyle();
+                         }
+                      }
+                      
+                      var utClass:* = getDefinitionByName("UT");
+                      var rArm:Number = utClass.getRotation(shX, shY, p.aimX, p.aimY) - 90;
+                      p.aimRoation = utClass.fixRotation(rArm + 90);
+                      
+                      if(rtDown && !this.wasRtDown)
+                      {
+                         this.wasRtDown = true;
+                         p.MouseDown();
+                         if(p.mDown && p.gun != null)
+                         {
+                            p.gun.shoot();
+                         }
+                      }
+                      else if(!rtDown && this.wasRtDown)
+                      {
+                         this.wasRtDown = false;
+                         p.MouseUp();
+                      }
+                   }
+                   catch(err:*)
+                   {
+                      super.y = origY;
+                   }
+                }
+             }
+          }
+          EOF
+
+          # Compile CustomAimer.as into working_sfh2.swf and assert it succeeded!
           java -Djava.awt.headless=true -Xmx3072m -jar ffdec_cli/ffdec.jar \
-            -selectclass Game,Player,Unit,Guns,Main,Menu,Aimer,ClassSave \
-            -export script ./decompiled_as3 working_sfh2.swf > ffdec_stdout.log 2>&1 || true
+            -replace working_sfh2.swf patched_sfh2.swf Aimer CustomAimer.as > ffdec_patch.log 2>&1
 
-          # If batch comma syntax exported 0 files, export each core class individually
-          COUNT=$(find decompiled_as3 -name "*.as" | wc -l)
-          if [ "$COUNT" -eq 0 ]; then
-            for cls in Game Player Unit Guns Aimer Main Menu ClassSave; do
-              java -Djava.awt.headless=true -Xmx3072m -jar ffdec_cli/ffdec.jar \
-                -selectclass "$cls" \
-                -export script ./decompiled_as3 working_sfh2.swf >> ffdec_stdout.log 2>&1 || true
-            done
+          cat ffdec_patch.log
+          if [ ! -f patched_sfh2.swf ]; then
+            echo "ERROR: FFDec failed to compile CustomAimer.as!"
+            exit 1
           fi
+          mv patched_sfh2.swf working_sfh2.swf
+          echo "SUCCESS: Native AS3 CustomAimer.as compiled into working_sfh2.swf!"
 
-          cat << 'EOF' > patch_sfh2.py
-          import os, glob, re, subprocess
+          # Also export MenuTips.as and inject sandbox sync if MenuTips.as has no obfuscation
+          mkdir -p decompiled_menu
+          java -Djava.awt.headless=true -Xmx3072m -jar ffdec_cli/ffdec.jar \
+            -selectclass MenuTips \
+            -export script ./decompiled_menu working_sfh2.swf || true
 
-          as_files = sorted(glob.glob("decompiled_as3/**/*.as", recursive=True))
-          with open("sfh2_core_scripts.txt", "w", encoding="utf-8") as out:
-              out.write(f"=== STRIKE FORCE HEROES 2 DECOMPILED CORE SCRIPTS ({len(as_files)} files) ===\n\n")
-              if os.path.exists("swf_recovery.log"):
-                  out.write("--- SWF RECOVERY LOG ---\n")
-                  out.write(open("swf_recovery.log", "r", encoding="utf-8").read() + "\n")
-              if len(as_files) == 0 and os.path.exists("ffdec_stdout.log"):
-                  out.write("--- FFDEC LOG ---\n")
-                  out.write(open("ffdec_stdout.log", "r", encoding="utf-8", errors="ignore").read() + "\n")
-              for path in as_files:
-                  out.write(f"\n{'='*60}\nFILE: {path}\n{'='*60}\n")
-                  with open(path, "r", encoding="utf-8", errors="ignore") as src:
-                      out.write(src.read())
-
-          game_as_list = glob.glob("decompiled_as3/**/Game.as", recursive=True)
-          if game_as_list:
-              game_as_path = game_as_list[0]
-              with open(game_as_path, "r", encoding="utf-8", errors="ignore") as f:
-                  code = f.read()
-
-              if "import flash.external.ExternalInterface;" not in code:
-                  code = re.sub(
-                      r"(package\s*\{)",
-                      r"\1\nimport flash.external.ExternalInterface;\nimport flash.geom.Point;",
-                      code,
-                      count=1
+          python3 - << 'PYEOF'
+          import os, glob, subprocess
+          mt_list = glob.glob("decompiled_menu/**/MenuTips.as", recursive=True)
+          if mt_list:
+              p = mt_list[0]
+              code = open(p, "r", encoding="utf-8", errors="ignore").read()
+              if "§§" not in code and "public function EnterFrame(" in code:
+                  code = code.replace(
+                      "package\n{",
+                      "package\n{\nimport flash.external.ExternalInterface;"
                   )
-
-              hook_snippet = """
-              try {
-                 if(ExternalInterface.available && this.player != null && !this.player.dead && this.unitCont != null) {
-                    var _thorPlrPt:Point = this.unitCont.localToGlobal(new Point(this.player.x, this.player.y));
-                    var _thorBestD:Number = 999999;
-                    var _thorHX:Number = -1;
-                    var _thorHY:Number = -1;
-                    if(this.units != null) {
-                       for each(var _thorU:* in this.units) {
-                          if(_thorU != null && _thorU != this.player && !_thorU.dead && _thorU.team != this.player.team) {
-                             var _thorEPt:Point = (_thorU.curHead != null) ? _thorU.curHead.localToGlobal(new Point(0,0)) : this.unitCont.localToGlobal(new Point(_thorU.x, _thorU.y - 34));
-                             var _thorDist:Number = Math.abs(_thorEPt.x - _thorPlrPt.x) + Math.abs(_thorEPt.y - _thorPlrPt.y);
-                             if(_thorDist < _thorBestD) {
-                                _thorBestD = _thorDist;
-                                _thorHX = _thorEPt.x;
-                                _thorHY = _thorEPt.y;
-                             }
-                          }
-                       }
-                    }
-                    ExternalInterface.call("thorSyncGame", _thorPlrPt.x, _thorPlrPt.y, this.player.flip, _thorHX, _thorHY, this.paused);
-                 }
-              } catch(_thorErr:*) {}
-              """
-
-              pattern = r"(public\s+function\s+EnterFrame\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{)"
-              if re.search(pattern, code):
-                  patched_code = re.sub(pattern, r"\1\n" + hook_snippet, code, count=1)
-                  with open(game_as_path, "w", encoding="utf-8") as f:
-                      f.write(patched_code)
+                  hook = """
+                  try {
+                     if(ExternalInterface.available) {
+                        var _sb:String = ExternalInterface.call("thorPollSandbox");
+                        Aimer.syncSandbox(_sb == "1");
+                     }
+                  } catch(_e:*) {}
+                  """
+                  code = code.replace("public function EnterFrame() : void\n      {", "public function EnterFrame() : void\n      {\n" + hook, 1)
+                  open(p, "w", encoding="utf-8").write(code)
                   subprocess.run([
                       "java", "-Djava.awt.headless=true", "-Xmx3072m", "-jar", "ffdec_cli/ffdec.jar",
-                      "-replace", "working_sfh2.swf", "patched_sfh2.swf",
-                      "Game", game_as_path
+                      "-replace", "working_sfh2.swf", "patched_menu.swf", "MenuTips", p
                   ], check=False)
-                  if os.path.exists("patched_sfh2.swf") and os.path.getsize("patched_sfh2.swf") > 5000000:
-                      os.replace("patched_sfh2.swf", "working_sfh2.swf")
-                      print("SUCCESS: Patched Game.as compiled into working_sfh2.swf")
-          EOF
-          python3 patch_sfh2.py
+                  if os.path.exists("patched_menu.swf") and os.path.getsize("patched_menu.swf") > 5000000:
+                      os.replace("patched_menu.swf", "working_sfh2.swf")
+                      print("SUCCESS: MenuTips.as also patched for instant Main Menu sandbox toggle!")
+          PYEOF
 
       - name: 6. Generate Android Native Project & Bundle Offline Ruffle
         run: |
@@ -259,8 +558,8 @@ jobs:
                   applicationId "com.sfh2.thormax"
                   minSdk 26
                   targetSdk 34
-                  versionCode 6
-                  versionName "1.5-ThorMax-Recovered"
+                  versionCode 7
+                  versionName "2.0-ThorMax-NativeAS3"
               }
 
               buildTypes {
@@ -525,11 +824,11 @@ jobs:
           gradle assembleDebug
           cp app/build/outputs/apk/debug/app-debug.apk StrikeForceHeroes2-ThorMax.apk
 
-      - name: 8. Publish APK & Decompiled AS3 Code to GitHub Releases
+      - name: 8. Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.5.${{ github.run_number }}
-          name: "Strike Force Heroes 2 - Thor Max APK + Decompiled AS3 (Build #${{ github.run_number }})"
+          tag_name: v2.0.${{ github.run_number }}
+          name: "Strike Force Heroes 2 - Thor Max Native AS3 Edition (Build #${{ github.run_number }})"
           files: |
             StrikeForceHeroes2-ThorMax.apk
-            sfh2_core_scripts.txt
+            ffdec_patch.log
