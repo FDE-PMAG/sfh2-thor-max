@@ -16,10 +16,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Checkout Repository Files
+      - name: 1. Checkout Repository with Full Git History
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 2. Set up Java 21 (Required by JPEXS FFDec & Gradle 8.7)
+      - name: 2. Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -34,35 +36,113 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: 5. Decompile & Patch SFH2 ActionScript 3 via JPEXS FFDec
+      - name: 5. Auto-Recover Valid SWF from Git History, Decompile & Patch AS3
         run: |
-          SWF_FILE=$(find . -maxdepth 2 -iname "*.swf" | head -n 1)
-          if [ -z "$SWF_FILE" ]; then
-            echo "ERROR: No .swf file found in repository!"
-            exit 1
-          fi
-          cp "$SWF_FILE" working_sfh2.swf
+          cat << 'EOF' > recover_swf.py
+          import os, glob, struct, subprocess, zlib
 
-          # Dynamically fetch the latest JPEXS FFDec release zip URL via GitHub API
+          def check_swf_bytes(data, label=""):
+              if len(data) < 5000000:
+                  return False, f"{label}: Too small ({len(data)} bytes)"
+              sig = data[:3]
+              if sig not in (b"FWS", b"CWS", b"ZWS"):
+                  return False, f"{label}: Invalid signature ({sig!r})"
+              ver = data[3]
+              declared_len = struct.unpack("<I", data[4:8])[0]
+              if sig == b"FWS":
+                  # Uncompressed FWS must match declared header length ( prevents UTF-8 corruption )
+                  if abs(len(data) - declared_len) > 128:
+                      return False, f"{label}: UTF-8 corrupted! Actual={len(data)} vs Header={declared_len}"
+              elif sig == b"CWS":
+                  try:
+                      decomp = zlib.decompress(data[8:])
+                      if abs(len(decomp) + 8 - declared_len) > 128:
+                          return False, f"{label}: CWS length mismatch"
+                  except Exception as e:
+                      return False, f"{label}: CWS zlib error {e}"
+              return True, f"{label}: VALID {sig.decode()} v{ver} ({len(data)} bytes, header={declared_len})"
+
+          log_lines = []
+          valid_swf_data = None
+
+          # 1. Check current working tree .swf files first
+          for f in sorted(glob.glob("**/*.swf", recursive=True)):
+              with open(f, "rb") as fp:
+                  d = fp.read()
+              ok, msg = check_swf_bytes(d, f"WorkingTree({f})")
+              log_lines.append(msg)
+              if ok and valid_swf_data is None:
+                  valid_swf_data = d
+
+          # 2. If working tree SWF was corrupted by rename, scan all Git history commits!
+          if valid_swf_data is None:
+              log_lines.append("Working tree SWF is invalid/corrupted. Scanning Git commit history...")
+              commits = subprocess.check_output(["git", "rev-list", "--all"]).decode().splitlines()
+              for c in commits:
+                  tree = subprocess.check_output(["git", "ls-tree", "-r", c]).decode().splitlines()
+                  for line in tree:
+                      if line.lower().endswith(".swf"):
+                          parts = line.split()
+                          blob_hash = parts[2]
+                          fname = parts[-1]
+                          d = subprocess.check_output(["git", "cat-file", "blob", blob_hash])
+                          ok, msg = check_swf_bytes(d, f"GitCommit({c[:7]}:{fname})")
+                          log_lines.append(msg)
+                          if ok:
+                              valid_swf_data = d
+                              break
+                  if valid_swf_data is not None:
+                      break
+
+          with open("swf_recovery.log", "w", encoding="utf-8") as lf:
+              lf.write("\n".join(log_lines) + "\n")
+          print("\n".join(log_lines))
+
+          if valid_swf_data is None:
+              raise SystemExit("FATAL: Could not find a valid uncorrupted .swf in working tree or Git history!")
+
+          with open("working_sfh2.swf", "wb") as out_swf:
+              out_swf.write(valid_swf_data)
+          print(f"Saved intact working_sfh2.swf ({len(valid_swf_data)} bytes)")
+          EOF
+          python3 recover_swf.py
+
+          # Download JPEXS Free Flash Decompiler (FFDec CLI)
           FFDEC_URL=$(curl -s https://api.github.com/repos/jindrapetrik/jpexs-decompiler/releases/latest | grep -o 'https://[^"]*ffdec_[0-9.]*\.zip' | head -n 1)
           if [ -z "$FFDEC_URL" ]; then
             FFDEC_URL="https://github.com/jindrapetrik/jpexs-decompiler/releases/download/version21.1.1/ffdec_21.1.1.zip"
           fi
-          echo "Downloading FFDec from: $FFDEC_URL"
-          curl -fL -o ffdec.zip "$FFDEC_URL"
+          curl -fL -s -o ffdec.zip "$FFDEC_URL"
           unzip -q ffdec.zip -d ffdec_cli
 
           mkdir -p decompiled_as3
+          # Try batch selectclass first
           java -Djava.awt.headless=true -Xmx3072m -jar ffdec_cli/ffdec.jar \
             -selectclass Game,Player,Unit,Guns,Main,Menu,Aimer,ClassSave \
-            -export script ./decompiled_as3 working_sfh2.swf || true
+            -export script ./decompiled_as3 working_sfh2.swf > ffdec_stdout.log 2>&1 || true
+
+          # If batch comma syntax exported 0 files, export each core class individually
+          COUNT=$(find decompiled_as3 -name "*.as" | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            for cls in Game Player Unit Guns Aimer Main Menu ClassSave; do
+              java -Djava.awt.headless=true -Xmx3072m -jar ffdec_cli/ffdec.jar \
+                -selectclass "$cls" \
+                -export script ./decompiled_as3 working_sfh2.swf >> ffdec_stdout.log 2>&1 || true
+            done
+          fi
 
           cat << 'EOF' > patch_sfh2.py
           import os, glob, re, subprocess
 
           as_files = sorted(glob.glob("decompiled_as3/**/*.as", recursive=True))
           with open("sfh2_core_scripts.txt", "w", encoding="utf-8") as out:
-              out.write(f"=== STRIKE FORCE HEROES 2 DECOMPILED CORE SCRIPTS ({len(as_files)} files) ===\n")
+              out.write(f"=== STRIKE FORCE HEROES 2 DECOMPILED CORE SCRIPTS ({len(as_files)} files) ===\n\n")
+              if os.path.exists("swf_recovery.log"):
+                  out.write("--- SWF RECOVERY LOG ---\n")
+                  out.write(open("swf_recovery.log", "r", encoding="utf-8").read() + "\n")
+              if len(as_files) == 0 and os.path.exists("ffdec_stdout.log"):
+                  out.write("--- FFDEC LOG ---\n")
+                  out.write(open("ffdec_stdout.log", "r", encoding="utf-8", errors="ignore").read() + "\n")
               for path in as_files:
                   out.write(f"\n{'='*60}\nFILE: {path}\n{'='*60}\n")
                   with open(path, "r", encoding="utf-8", errors="ignore") as src:
@@ -117,7 +197,7 @@ jobs:
                       "-replace", "working_sfh2.swf", "patched_sfh2.swf",
                       "Game", game_as_path
                   ], check=False)
-                  if os.path.exists("patched_sfh2.swf") and os.path.getsize("patched_sfh2.swf") > 1000000:
+                  if os.path.exists("patched_sfh2.swf") and os.path.getsize("patched_sfh2.swf") > 5000000:
                       os.replace("patched_sfh2.swf", "working_sfh2.swf")
                       print("SUCCESS: Patched Game.as compiled into working_sfh2.swf")
           EOF
@@ -179,8 +259,8 @@ jobs:
                   applicationId "com.sfh2.thormax"
                   minSdk 26
                   targetSdk 34
-                  versionCode 5
-                  versionName "1.4-ThorMax-AS3Hook"
+                  versionCode 6
+                  versionName "1.5-ThorMax-Recovered"
               }
 
               buildTypes {
@@ -448,7 +528,7 @@ jobs:
       - name: 8. Publish APK & Decompiled AS3 Code to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.4.${{ github.run_number }}
+          tag_name: v1.5.${{ github.run_number }}
           name: "Strike Force Heroes 2 - Thor Max APK + Decompiled AS3 (Build #${{ github.run_number }})"
           files: |
             StrikeForceHeroes2-ThorMax.apk
