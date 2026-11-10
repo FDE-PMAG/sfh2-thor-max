@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Strike Force Heroes 2 - Thor Max Edition</title>
+  <title>Strike Force Heroes 2 - Thor Max Native AS3 Edition</title>
   <style>
     * {
       box-sizing: border-box;
@@ -67,8 +67,8 @@
       font-weight: 700;
       font-size: 11px;
     }
-    .badge-dread { background: #9b2c2c; color: #fed7d7; }
     .badge-combat { background: #1e6f40; color: #b7f7d0; }
+    .badge-dread { background: #9b2c2c; color: #fed7d7; }
     .badge-menu { background: #2c5282; color: #bee3f8; }
     .badge-sandbox { background: #b7791f; color: #fefcbf; }
 
@@ -136,7 +136,7 @@
       font-weight: 700;
       font-size: 12px;
       cursor: pointer;
-      min-width: 130px;
+      min-width: 135px;
       text-align: center;
     }
     .switch-btn.active {
@@ -187,49 +187,48 @@
   <canvas id="hud-canvas"></canvas>
 
   <div id="status-pill" onclick="toggleSubmenu()">
-    <span id="mode-badge" class="badge badge-dread">DREAD AIM (LB)</span>
+    <span id="mode-badge" class="badge badge-menu">MENU CURSOR</span>
     <span id="prog-badge" class="badge" style="display:none;">SANDBOX UNLOCKED</span>
     <span>SELECT: MENU</span>
   </div>
 
-  <!-- Submenu Overlay -->
   <div id="submenu-modal">
     <div class="modal-card">
       <div class="modal-header">
-        <h2>THOR MAX TACTICAL & PROGRESSION MENU</h2>
+        <h2>THOR MAX NATIVE AS3 AIM & PROGRESSION</h2>
         <span style="font-size:12px; color:#a0aec0;">[SELECT] to Close</span>
       </div>
 
       <div class="row-item">
         <div class="row-label">
-          <h4>Aiming Control Scheme (Cycle in-game with LB)</h4>
-          <p><b>Metroid Dread:</b> Zeros aim directly onto your soldier's facing direction; hold <b>LT</b> for 360° Laser & 1s Enemy Headshot Lock.<br><b>Twin-Stick:</b> Progressive 360° Right-Stick orbit centered on your soldier.<br><b>Menu Cursor:</b> Free mouse for menus & slots.</p>
+          <h4>In-Match Aiming Style (Toggle with LB)</h4>
+          <p><b>Twin-Stick Progressive:</b> Right Stick aims 360° around your soldier; releasing the stick zeros aim forward.<br><b>Metroid Dread:</b> Holding <b>LT</b> lets either stick sweep the laser sight & lock headshots.</p>
         </div>
-        <button id="aimmode-toggle-btn" class="switch-btn active" onclick="cycleControlMode()">METROID DREAD</button>
+        <button id="aimmode-toggle-btn" class="switch-btn active" onclick="toggleCombatStyle()">TWIN-STICK</button>
       </div>
 
       <div class="row-item">
         <div class="row-label">
           <h4>Unlock Everything Ahead of Schedule</h4>
-          <p>Snapshots your real save (`SFH2_SO_3H2KUJRH5S`) into a vault and unlocks max level, funds, and campaign stages. Turning this OFF restores your original progression.</p>
+          <p>Natively backs up `SD.classSaves` in AS3 and unlocks Level 50, $999,999, all 20 Camos, and all 15 Campaign & Challenge stages. Turning this OFF restores your real save.</p>
         </div>
         <button id="sandbox-toggle-btn" class="switch-btn" onclick="toggleSandboxProgression()">OFF (ORIGINAL)</button>
       </div>
 
       <div class="row-item">
         <div class="row-label">
-          <h4>Joystick Radial Deadzone (<span id="dz-val">26</span>%)</h4>
-          <p>When the stick is inside this deadzone, aim zeros directly in front of your soldier sprite in the direction of travel.</p>
+          <h4>Joystick Radial Deadzone (<span id="dz-val">25</span>%)</h4>
+          <p>Inside this deadzone, your soldier's aim zeros dead-level in front of your direction of travel.</p>
         </div>
-        <input id="dz-slider" class="slider-input" type="range" min="12" max="45" value="26" oninput="updateDeadzone(this.value)" />
+        <input id="dz-slider" class="slider-input" type="range" min="10" max="45" value="25" oninput="updateDeadzone(this.value)" />
       </div>
 
       <div class="row-item">
         <div class="row-label">
-          <h4>Progressive Aim Speed (<span id="speed-val">400</span>°/s)</h4>
-          <p>Angular rotation speed around your soldier. Gentle stick tilt moves slowly; full tilt turns rapidly.</p>
+          <h4>Progressive Aim Speed (<span id="speed-val">100</span>%)</h4>
+          <p>Scales how quickly the gun barrel tracks stick deflection outside the deadzone.</p>
         </div>
-        <input id="speed-slider" class="slider-input" type="range" min="160" max="720" value="400" oninput="updateTurnSpeed(this.value)" />
+        <input id="speed-slider" class="slider-input" type="range" min="40" max="200" value="100" oninput="updateTurnSpeed(this.value)" />
       </div>
 
       <div class="row-item">
@@ -241,11 +240,11 @@
       </div>
 
       <div class="telemetry-box" id="stick-telemetry">
-        Diagnostics: Waiting for AS3 hook...
+        Diagnostics: Waiting for input...
       </div>
 
       <div class="modal-footer">
-        <span>LT (1.0s) = Enemy Head Lock | RT = Fire | LB = Mode</span>
+        <span>LT (1.0s) = Native MC.head Lock | RT = Fire | LB = Style</span>
         <button class="close-btn" onclick="toggleSubmenu()">Resume Game</button>
       </div>
     </div>
@@ -253,35 +252,10 @@
 
   <script>
     /********************************************************************
-     * 1. RUFFLE FLASH INITIALIZATION & AS3 EXTERNALINTERFACE BRIDGE
+     * 1. RUFFLE INITIALIZATION
      ********************************************************************/
     let rufflePlayer = null;
     let ruffleCanvas = null;
-
-    // Live Telemetry from Patched SFH2 ActionScript 3 (Game.EnterFrame)
-    const as3State = {
-      connected: false,
-      lastPacketTime: 0,
-      playerStageX: 400,     // 0..800 Flash Stage X of player.localToGlobal
-      playerStageY: 300,     // 0..600 Flash Stage Y of player.localToGlobal
-      playerFlip: 1,         // 1 = Right, -1 = Left
-      enemyHeadStageX: -1,   // Nearest living enemy curHead X in Stage space
-      enemyHeadStageY: -1,   // Nearest living enemy curHead Y in Stage space
-      inMatch: false
-    };
-
-    // Called at 30-60FPS directly from patched Game.as inside sfh2.swf!
-    window.thorSyncGame = function(px, py, flip, hx, hy, paused) {
-      as3State.connected = true;
-      as3State.lastPacketTime = performance.now();
-      as3State.playerStageX = Number(px) || 400;
-      as3State.playerStageY = Number(py) || 300;
-      as3State.playerFlip = (Number(flip) < 0) ? -1 : 1;
-      as3State.enemyHeadStageX = Number(hx);
-      as3State.enemyHeadStageY = Number(hy);
-      as3State.inMatch = !paused;
-      return "ok";
-    };
 
     window.RufflePlayer = window.RufflePlayer || {};
     window.RufflePlayer.config = {
@@ -324,103 +298,7 @@
     });
 
     /********************************************************************
-     * 2. PROGRESSION VAULT (SFH2_SO_3H2KUJRH5S) & SANDBOX UNLOCK TOGGLE
-     ********************************************************************/
-    const VAULT_KEY = "__THOR_ORIGINAL_SAVE_VAULT__";
-    const SANDBOX_STATE_KEY = "__THOR_SANDBOX_ACTIVE__";
-
-    function isSandboxActive() {
-      return localStorage.getItem(SANDBOX_STATE_KEY) === "true";
-    }
-
-    function getRuffleSolKeys() {
-      const keys = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k !== VAULT_KEY && k !== SANDBOX_STATE_KEY && !k.startsWith("__THOR_")) {
-          keys.push(k);
-        }
-      }
-      return keys;
-    }
-
-    function patchSolBase64ToMax(b64String) {
-      try {
-        const raw = atob(b64String);
-        const bytes = new Uint8Array(raw.length);
-        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-
-        const decoder = new TextDecoder("ascii");
-        const asciiView = decoder.decode(bytes);
-        // Exact property names from SFH2 ClassSave & Main constant pool
-        const targetWords = ["funds", "exp", "level", "completecamp", "completechal", "gambledmoney", "soldmoney"];
-        const maxDouble = [0x41, 0x2E, 0x84, 0x7E, 0x00, 0x00, 0x00, 0x00];
-
-        for (const word of targetWords) {
-          let searchIdx = 0;
-          while (true) {
-            const found = asciiView.toLowerCase().indexOf(word, searchIdx);
-            if (found === -1) break;
-            const afterName = found + word.length;
-            if (afterName + 9 <= bytes.length && bytes[afterName] === 0x00) {
-              for (let b = 0; b < 8; b++) {
-                bytes[afterName + 1 + b] = maxDouble[b];
-              }
-            }
-            searchIdx = afterName;
-          }
-        }
-
-        let outBin = "";
-        for (let i = 0; i < bytes.length; i++) outBin += String.fromCharCode(bytes[i]);
-        return btoa(outBin);
-      } catch (e) {
-        return b64String;
-      }
-    }
-
-    function toggleSandboxProgression() {
-      const currentlySandbox = isSandboxActive();
-      if (!currentlySandbox) {
-        const backup = {};
-        const solKeys = getRuffleSolKeys();
-        for (const k of solKeys) backup[k] = localStorage.getItem(k);
-        localStorage.setItem(VAULT_KEY, JSON.stringify(backup));
-        for (const k of solKeys) {
-          if (backup[k]) localStorage.setItem(k, patchSolBase64ToMax(backup[k]));
-        }
-        localStorage.setItem(SANDBOX_STATE_KEY, "true");
-      } else {
-        const rawVault = localStorage.getItem(VAULT_KEY);
-        for (const k of getRuffleSolKeys()) localStorage.removeItem(k);
-        if (rawVault) {
-          const restored = JSON.parse(rawVault);
-          for (const k of Object.keys(restored)) localStorage.setItem(k, restored[k]);
-        }
-        localStorage.setItem(SANDBOX_STATE_KEY, "false");
-      }
-      syncSandboxUI();
-      bootRuffle();
-    }
-
-    function syncSandboxUI() {
-      const active = isSandboxActive();
-      const btn = document.getElementById("sandbox-toggle-btn");
-      const badge = document.getElementById("prog-badge");
-      if (active) {
-        btn.textContent = "ON (SANDBOX UNLOCKED)";
-        btn.classList.add("active");
-        badge.style.display = "inline-block";
-        badge.className = "badge badge-sandbox";
-      } else {
-        btn.textContent = "OFF (ORIGINAL SAVE)";
-        btn.classList.remove("active");
-        badge.style.display = "none";
-      }
-    }
-
-    /********************************************************************
-     * 3. SOLDIER-CENTERED AIMING & REAL HEADSHOT LOCK ENGINE
+     * 2. CONTROLLER STATE & AS3 NATIVE AIM BRIDGE (window.thorPollPad)
      ********************************************************************/
     const hudCanvas = document.getElementById("hud-canvas");
     const ctx = hudCanvas.getContext("2d");
@@ -432,20 +310,21 @@
     window.addEventListener("resize", resizeHud);
     resizeHud();
 
-    let controlMode = 0;          // 0 = Metroid Dread, 1 = Twin-Stick, 2 = Menu Cursor
-    let stickDeadzone = 0.26;
-    let maxTurnSpeedDeg = 400;
+    let dreadStyle = false;       // False = Twin-Stick Progressive, True = Metroid Dread
+    let stickDeadzone = 0.25;
+    let speedMultiplier = 1.0;
+    let sandboxEnabled = localStorage.getItem("__THOR_SANDBOX_ACTIVE__") === "true";
     let submenuOpen = false;
 
-    // Tracked Soldier Position on Screen (Updated via AS3 hook + Movement Dead-Reckoning fallback)
-    let estStageX = 400;          // 0..800 Flash stage units
-    let estStageY = 300;          // 0..600 Flash stage units
-    let travelDir = 1;            // +1 = Right, -1 = Left
-    let aimAngle = 0;             // 0 = Right, Math.PI = Left
-    let cursorX = window.innerWidth * 0.65;
-    let cursorY = window.innerHeight * 0.5;
+    // Tracks whether AS3 Aimer.as is actively polling (i.e. player is alive in an unpaused match)
+    let lastAs3PollTime = -9999;
+    let as3PlrScreenX = 400;
+    let as3PlrScreenY = 300;
     let ltHoldSeconds = 0;
-    let headshotLocked = false;
+
+    // Menu Cursor coordinates (used only when not in active combat)
+    let menuCursorX = window.innerWidth * 0.5;
+    let menuCursorY = window.innerHeight * 0.5;
 
     const pad = {
       lx: 0, ly: 0,
@@ -465,12 +344,11 @@
     function resetCalibration() {
       baselines = {};
       ltHoldSeconds = 0;
-      headshotLocked = false;
     }
 
     function readCalibratedStick(key, rawVal) {
       if (baselines[key] === undefined) baselines[key] = rawVal;
-      if (baselines[key] < -0.65) return 0; // Reject resting trigger axes
+      if (baselines[key] < -0.65) return 0;
       return rawVal;
     }
 
@@ -533,6 +411,119 @@
       }
     };
 
+    /*
+     * Called directly by patched Aimer.as inside sfh2.swf at 30 FPS during combat!
+     * Returns: "rx,ry,normMag,ltActive,ltProg,ltLocked,rtDown,wantSandbox,speedMult"
+     */
+    window.thorPollPad = function(plrX, plrY, lastDir) {
+      lastAs3PollTime = performance.now();
+      as3PlrScreenX = Number(plrX) || 400;
+      as3PlrScreenY = Number(plrY) || 300;
+
+      const ltActive = pad.lt > 0.25;
+      const rtDown = pad.rt > 0.30;
+
+      // Determine active aiming stick (Right Stick, or Left Stick when holding LT in Dread mode)
+      let sx = pad.rx;
+      let sy = pad.ry;
+      let rawMag = Math.hypot(sx, sy);
+
+      if (dreadStyle && ltActive && rawMag <= stickDeadzone) {
+        const lMag = Math.hypot(pad.lx, pad.ly);
+        if (lMag > stickDeadzone) {
+          sx = pad.lx;
+          sy = pad.ly;
+          rawMag = lMag;
+        }
+      }
+
+      let normMag = 0;
+      if (rawMag > stickDeadzone) {
+        normMag = Math.min(1.0, (rawMag - stickDeadzone) / (1.0 - stickDeadzone));
+      }
+
+      const ltProg = Math.min(1.0, ltHoldSeconds / 1.0);
+      const ltLocked = (ltActive && ltHoldSeconds >= 1.0) ? "1" : "0";
+
+      return [
+        sx.toFixed(4),
+        sy.toFixed(4),
+        normMag.toFixed(4),
+        ltActive ? "1" : "0",
+        ltProg.toFixed(3),
+        ltLocked,
+        rtDown ? "1" : "0",
+        sandboxEnabled ? "1" : "0",
+        speedMultiplier.toFixed(2)
+      ].join(",");
+    };
+
+    // Also allow MenuButton hook to poll sandbox state on the Main Menu
+    window.thorPollSandbox = function() {
+      return sandboxEnabled ? "1" : "0";
+    };
+
+    /********************************************************************
+     * 3. UI CONTROLS & SANDBOX TOGGLE
+     ********************************************************************/
+    function toggleSubmenu() {
+      submenuOpen = !submenuOpen;
+      document.getElementById("submenu-modal").classList.toggle("open", submenuOpen);
+    }
+
+    function toggleCombatStyle() {
+      dreadStyle = !dreadStyle;
+      const btn = document.getElementById("aimmode-toggle-btn");
+      btn.textContent = dreadStyle ? "METROID DREAD" : "TWIN-STICK";
+      updateTopBadge();
+    }
+
+    function toggleSandboxProgression() {
+      sandboxEnabled = !sandboxEnabled;
+      localStorage.setItem("__THOR_SANDBOX_ACTIVE__", sandboxEnabled ? "true" : "false");
+      syncSandboxUI();
+    }
+
+    function syncSandboxUI() {
+      const btn = document.getElementById("sandbox-toggle-btn");
+      const badge = document.getElementById("prog-badge");
+      if (sandboxEnabled) {
+        btn.textContent = "ON (SANDBOX UNLOCKED)";
+        btn.classList.add("active");
+        badge.style.display = "inline-block";
+        badge.className = "badge badge-sandbox";
+      } else {
+        btn.textContent = "OFF (ORIGINAL SAVE)";
+        btn.classList.remove("active");
+        badge.style.display = "none";
+      }
+    }
+
+    function updateDeadzone(val) {
+      stickDeadzone = parseInt(val, 10) / 100;
+      document.getElementById("dz-val").textContent = val;
+    }
+
+    function updateTurnSpeed(val) {
+      speedMultiplier = parseInt(val, 10) / 100;
+      document.getElementById("speed-val").textContent = val;
+    }
+
+    function updateTopBadge() {
+      const inCombat = (performance.now() - lastAs3PollTime) < 180;
+      const badge = document.getElementById("mode-badge");
+      if (inCombat) {
+        badge.textContent = dreadStyle ? "AS3 DREAD AIM (LB)" : "AS3 TWIN-STICK (LB)";
+        badge.className = dreadStyle ? "badge badge-dread" : "badge badge-combat";
+      } else {
+        badge.textContent = "MENU CURSOR (AUTO)";
+        badge.className = "badge badge-menu";
+      }
+    }
+
+    /********************************************************************
+     * 4. KEYBOARD & MENU-ONLY MOUSE DISPATCHER
+     ********************************************************************/
     const KEY_MAP = {
       KeyA:   { key: "a", code: "KeyA", keyCode: 65 },
       KeyD:   { key: "d", code: "KeyD", keyCode: 68 },
@@ -573,130 +564,53 @@
       if (canvas) canvas.dispatchEvent(new KeyboardEvent(type, evtInit));
     }
 
-    let lastSentX = -1, lastSentY = -1, lastSentDown = false;
+    let lastMenuX = -1, lastMenuY = -1, lastMenuDown = false;
 
-    function syncStageMouse(x, y, isDown) {
-      const moved = (Math.abs(x - lastSentX) > 0.4) || (Math.abs(y - lastSentY) > 0.4);
-      const clickChanged = (isDown !== lastSentDown);
+    function syncMenuMouse(x, y, isDown) {
+      const moved = (Math.abs(x - lastMenuX) > 0.5) || (Math.abs(y - lastMenuY) > 0.5);
+      const clickChanged = (isDown !== lastMenuDown);
 
-      if (window.ThorInputBridge && (moved || clickChanged || isDown)) {
+      if (window.ThorInputBridge && (moved || clickChanged)) {
         window.ThorInputBridge.sendMouse(x, y, isDown);
       }
 
       const canvas = getActiveRuffleCanvas();
-      if (canvas) {
+      if (canvas && (moved || clickChanged)) {
         const rect = canvas.getBoundingClientRect();
         const offX = x - rect.left;
         const offY = y - rect.top;
-        if (moved) fireCanvasPointer(canvas, "pointermove", "mousemove", x, y, offX, offY, isDown);
+        const init = {
+          view: window, clientX: x, clientY: y, screenX: x, screenY: y,
+          button: 0, buttons: isDown ? 1 : 0, pointerId: 1,
+          pointerType: "mouse", isPrimary: true, bubbles: true, cancelable: true, composed: true
+        };
+        if (moved) {
+          const pm = new PointerEvent("pointermove", init);
+          Object.defineProperty(pm, "offsetX", { get: () => offX });
+          Object.defineProperty(pm, "offsetY", { get: () => offY });
+          canvas.dispatchEvent(pm);
+        }
         if (clickChanged) {
-          if (isDown) fireCanvasPointer(canvas, "pointerdown", "mousedown", x, y, offX, offY, true);
-          else fireCanvasPointer(canvas, "pointerup", "mouseup", x, y, offX, offY, false);
+          const pt = isDown ? "pointerdown" : "pointerup";
+          const mt = isDown ? "mousedown" : "mouseup";
+          const pe = new PointerEvent(pt, init);
+          Object.defineProperty(pe, "offsetX", { get: () => offX });
+          Object.defineProperty(pe, "offsetY", { get: () => offY });
+          canvas.dispatchEvent(pe);
+          const me = new MouseEvent(mt, init);
+          Object.defineProperty(me, "offsetX", { get: () => offX });
+          Object.defineProperty(me, "offsetY", { get: () => offY });
+          canvas.dispatchEvent(me);
         }
       }
 
-      lastSentX = x;
-      lastSentY = y;
-      lastSentDown = isDown;
-    }
-
-    function fireCanvasPointer(canvas, ptrType, mouseType, clientX, clientY, offsetX, offsetY, isDown) {
-      const init = {
-        view: window,
-        clientX: clientX,
-        clientY: clientY,
-        screenX: clientX,
-        screenY: clientY,
-        button: 0,
-        buttons: isDown ? 1 : 0,
-        pointerId: 1,
-        pointerType: "mouse",
-        isPrimary: true,
-        bubbles: true,
-        cancelable: true,
-        composed: true
-      };
-      const pEvt = new PointerEvent(ptrType, init);
-      Object.defineProperty(pEvt, "offsetX", { get: () => offsetX });
-      Object.defineProperty(pEvt, "offsetY", { get: () => offsetY });
-      canvas.dispatchEvent(pEvt);
-
-      const mEvt = new MouseEvent(mouseType, init);
-      Object.defineProperty(mEvt, "offsetX", { get: () => offsetX });
-      Object.defineProperty(mEvt, "offsetY", { get: () => offsetY });
-      canvas.dispatchEvent(mEvt);
-    }
-
-    // Convert 800x600 Flash Stage Coordinates -> Screen Pixel Coordinates
-    function getStageRect() {
-      const canvas = getActiveRuffleCanvas();
-      if (canvas) {
-        const r = canvas.getBoundingClientRect();
-        if (r.width > 100 && r.height > 100) return r;
-      }
-      const h = window.innerHeight;
-      const w = h * (800 / 600);
-      return { left: (window.innerWidth - w) * 0.5, top: 0, width: w, height: h };
-    }
-
-    function stageToScreen(stageX, stageY) {
-      const r = getStageRect();
-      return {
-        x: r.left + (stageX / 800) * r.width,
-        y: r.top + (stageY / 600) * r.height
-      };
-    }
-
-    function rotateAngleProgressively(currentRad, targetRad, normDeflection, dt, dampingMult) {
-      let diff = targetRad - currentRad;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-
-      const progressiveCurve = Math.pow(normDeflection, 1.65);
-      const maxStepRad = (maxTurnSpeedDeg * Math.PI / 180) * progressiveCurve * dampingMult * dt;
-      if (Math.abs(diff) <= maxStepRad) return targetRad;
-      return currentRad + Math.sign(diff) * maxStepRad;
-    }
-
-    function toggleSubmenu() {
-      submenuOpen = !submenuOpen;
-      document.getElementById("submenu-modal").classList.toggle("open", submenuOpen);
-    }
-
-    function cycleControlMode() {
-      controlMode = (controlMode + 1) % 3;
-      const badge = document.getElementById("mode-badge");
-      const btn = document.getElementById("aimmode-toggle-btn");
-      if (controlMode === 0) {
-        badge.textContent = "DREAD AIM (LB)";
-        badge.className = "badge badge-dread";
-        btn.textContent = "METROID DREAD";
-        btn.classList.add("active");
-      } else if (controlMode === 1) {
-        badge.textContent = "TWIN-STICK (LB)";
-        badge.className = "badge badge-combat";
-        btn.textContent = "TWIN-STICK";
-        btn.classList.add("active");
-      } else {
-        badge.textContent = "MENU CURSOR (LB)";
-        badge.className = "badge badge-menu";
-        btn.textContent = "MENU CURSOR";
-        btn.classList.remove("active");
-      }
-    }
-
-    function updateDeadzone(val) {
-      stickDeadzone = parseInt(val, 10) / 100;
-      document.getElementById("dz-val").textContent = val;
-    }
-
-    function updateTurnSpeed(val) {
-      maxTurnSpeedDeg = parseInt(val, 10);
-      document.getElementById("speed-val").textContent = val;
+      lastMenuX = x;
+      lastMenuY = y;
+      lastMenuDown = isDown;
     }
 
     /********************************************************************
-     * 4. MAIN 60HZ GAMEPAD, SOLDIER TRACKER & AIM LOOP
+     * 5. MAIN 60HZ LOOP
      ********************************************************************/
     let lastTime = performance.now();
 
@@ -705,230 +619,85 @@
       lastTime = now;
 
       if (pad.btnSelect && !prevPad.btnSelect) toggleSubmenu();
-      if (pad.btnLB && !prevPad.btnLB) cycleControlMode();
+      if (pad.btnLB && !prevPad.btnLB) toggleCombatStyle();
+
+      const inCombat = (now - lastAs3PollTime) < 180;
+      updateTopBadge();
 
       if (submenuOpen) {
         const tel = document.getElementById("stick-telemetry");
         if (tel) {
-          const hookStatus = (now - as3State.lastPacketTime < 500)
-            ? `AS3 HOOK ACTIVE | Plr:(${Math.round(as3State.playerStageX)},${Math.round(as3State.playerStageY)})`
-            : `EstPlr:(${Math.round(estStageX)},${Math.round(estStageY)})`;
-          tel.textContent = `${hookStatus} | LS:(${pad.lx.toFixed(2)},${pad.ly.toFixed(2)}) | RS:(${pad.rx.toFixed(2)},${pad.ry.toFixed(2)}) | LT:${pad.lt.toFixed(2)} RT:${pad.rt.toFixed(2)}`;
+          tel.textContent = `${inCombat ? "AS3 COMBAT ACTIVE" : "MENU MODE"} | LS:(${pad.lx.toFixed(2)},${pad.ly.toFixed(2)}) | RS:(${pad.rx.toFixed(2)},${pad.ry.toFixed(2)}) | LT:${pad.lt.toFixed(2)} RT:${pad.rt.toFixed(2)}`;
         }
       }
 
       if (!submenuOpen) {
-        const ltActive = pad.lt > 0.30;
+        const ltActive = pad.lt > 0.25;
+        if (ltActive) ltHoldSeconds += dt;
+        else ltHoldSeconds = 0;
 
-        // 1. Left Stick & D-Pad Movement + Direction of Travel
-        const moveLeft  = (pad.lx < -stickDeadzone) || (pad.hatX < -0.5);
-        const moveRight = (pad.lx >  stickDeadzone) || (pad.hatX >  0.5);
-        const moveDown  = (pad.ly >  0.48) || (pad.hatY >  0.5);
-        const moveUp    = (pad.ly < -0.58) || (pad.hatY < -0.5);
+        // 1. Dispatch Movement & Action Keys
+        // In Dread Mode, if LT is held and Right Stick is untouched, Left Stick aims the laser while soldier holds position
+        const dreadLeftStickAiming = inCombat && dreadStyle && ltActive && (Math.hypot(pad.rx, pad.ry) <= stickDeadzone);
 
-        if (moveRight && !moveLeft) travelDir = 1;
-        else if (moveLeft && !moveRight) travelDir = -1;
+        const moveLeft  = (!dreadLeftStickAiming && pad.lx < -stickDeadzone) || (pad.hatX < -0.5);
+        const moveRight = (!dreadLeftStickAiming && pad.lx >  stickDeadzone) || (pad.hatX >  0.5);
+        const moveDown  = (!dreadLeftStickAiming && pad.ly >  0.48) || (pad.hatY >  0.5);
+        const moveUp    = (!dreadLeftStickAiming && pad.ly < -0.58) || (pad.hatY < -0.5);
 
         setKeyState("KeyA", moveLeft);
         setKeyState("KeyD", moveRight);
         setKeyState("KeyS", moveDown);
-        setKeyState("KeyW", moveUp || pad.btnA);
-        setKeyState("Space", pad.btnA);
+        setKeyState("KeyW", moveUp || (inCombat && pad.btnA));
+        setKeyState("Space", inCombat && pad.btnA);
         setKeyState("KeyR", pad.btnX);
         setKeyState("KeyQ", pad.btnY);
         setKeyState("KeyE", pad.btnRB || pad.btnB);
         setKeyState("Escape", pad.btnStart);
 
-        // 2. Determine Soldier's Exact Position on Stage (AS3 Hook or Dead-Reckoning)
-        if (now - as3State.lastPacketTime < 500) {
-          estStageX = as3State.playerStageX;
-          estStageY = as3State.playerStageY - 22; // Shoulder/Gun pivot height
-        } else {
-          // Smoothly track soldier across stage when walking toward walls so orbit is never behind soldier
-          if (moveRight) estStageX = Math.min(680, estStageX + 190 * dt);
-          else if (moveLeft) estStageX = Math.max(120, estStageX - 190 * dt);
-          else estStageX += (400 - estStageX) * 1.5 * dt;
+        // 2. If NOT in active AS3 combat (i.e. in Main Menu, Loadouts, Slot Machine, or Pause Menu),
+        //    run the virtual Menu Cursor! During combat, AS3 Aimer.as handles 100% of aiming & shooting natively!
+        ctx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+
+        if (!inCombat) {
+          const rMag = Math.hypot(pad.rx, pad.ry);
+          const lMag = Math.hypot(pad.lx, pad.ly);
+          const ax = (rMag > stickDeadzone) ? pad.rx : ((lMag > stickDeadzone) ? pad.lx : 0);
+          const ay = (rMag > stickDeadzone) ? pad.ry : ((lMag > stickDeadzone) ? pad.ly : 0);
+          const aMag = Math.hypot(ax, ay);
+
+          if (aMag > stickDeadzone) {
+            const norm = (aMag - stickDeadzone) / (1.0 - stickDeadzone);
+            const speed = (ltActive ? 320 : 780) * Math.pow(norm, 1.45) * dt;
+            menuCursorX = Math.max(10, Math.min(window.innerWidth - 10, menuCursorX + (ax / aMag) * speed));
+            menuCursorY = Math.max(10, Math.min(window.innerHeight - 10, menuCursorY + (ay / aMag) * speed));
+          }
+
+          const menuClick = (pad.rt > 0.30) || pad.btnA;
+          syncMenuMouse(menuCursorX, menuCursorY, menuClick);
+
+          // Draw Menu Cursor
+          ctx.save();
+          ctx.translate(menuCursorX, menuCursorY);
+          ctx.strokeStyle = "#63b3ed";
+          ctx.lineWidth = 2.2;
+          const g = 4, len = 11;
+          ctx.beginPath();
+          ctx.moveTo(-len, 0); ctx.lineTo(-g, 0);
+          ctx.moveTo(g, 0);    ctx.lineTo(len, 0);
+          ctx.moveTo(0, -len); ctx.lineTo(0, -g);
+          ctx.moveTo(0, g);    ctx.lineTo(0, len);
+          ctx.stroke();
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
         }
-
-        const soldierScreen = stageToScreen(estStageX, estStageY);
-        const anchorX = soldierScreen.x;
-        const anchorY = soldierScreen.y;
-
-        const rMag = Math.hypot(pad.rx, pad.ry);
-        const lMag = Math.hypot(pad.lx, pad.ly);
-        const stageRect = getStageRect();
-
-        // Compact orbit radius around the SOLDIER (keeps camera stable and guarantees right/left accuracy)
-        const zeroDistPx = stageRect.width * 0.14;
-        const aimOrbitPx = stageRect.width * 0.24;
-
-        if (controlMode === 2) {
-          // MODE 2: FREE MENU CURSOR
-          ltHoldSeconds = 0;
-          headshotLocked = false;
-          const activeX = (rMag > stickDeadzone) ? pad.rx : ((lMag > stickDeadzone) ? pad.lx : 0);
-          const activeY = (rMag > stickDeadzone) ? pad.ry : ((lMag > stickDeadzone) ? pad.ly : 0);
-          const activeMag = Math.hypot(activeX, activeY);
-
-          if (activeMag > stickDeadzone) {
-            const norm = (activeMag - stickDeadzone) / (1 - stickDeadzone);
-            const speed = (ltActive ? 320 : 820) * Math.pow(norm, 1.5) * dt;
-            cursorX = Math.max(10, Math.min(window.innerWidth - 10, cursorX + (activeX / activeMag) * speed));
-            cursorY = Math.max(10, Math.min(window.innerHeight - 10, cursorY + (activeY / activeMag) * speed));
-          }
-        } else {
-          // MODE 0 (METROID DREAD) & MODE 1 (TWIN-STICK)
-          let stickX = pad.rx, stickY = pad.ry, mag = rMag;
-          if (controlMode === 0 && ltActive && rMag <= stickDeadzone && lMag > stickDeadzone) {
-            stickX = pad.lx;
-            stickY = pad.ly;
-            mag = lMag;
-          }
-
-          if (ltActive) {
-            ltHoldSeconds += dt;
-            if (ltHoldSeconds < 1.0) {
-              // 0.0s - 1.0s: Fine-Aim Refinement around the Soldier
-              headshotLocked = false;
-              if (mag > stickDeadzone) {
-                const norm = Math.min(1, (mag - stickDeadzone) / (1 - stickDeadzone));
-                const targetAngle = Math.atan2(stickY, stickX);
-                aimAngle = rotateAngleProgressively(aimAngle, targetAngle, norm, dt, 0.65);
-                travelDir = (Math.cos(aimAngle) >= 0) ? 1 : -1;
-              }
-              cursorX = anchorX + Math.cos(aimAngle) * aimOrbitPx;
-              cursorY = anchorY + Math.sin(aimAngle) * aimOrbitPx;
-            } else {
-              // 1.0s+ LT Hold: LOCK ONTO ENEMY HEAD!
-              headshotLocked = true;
-              if (as3State.connected && as3State.enemyHeadStageX >= 0) {
-                // Lock directly onto nearest living enemy's curHead from AS3!
-                const headScreen = stageToScreen(as3State.enemyHeadStageX, as3State.enemyHeadStageY);
-                cursorX = headScreen.x;
-                cursorY = headScreen.y;
-                aimAngle = Math.atan2(cursorY - anchorY, cursorX - anchorX);
-                travelDir = (Math.cos(aimAngle) >= 0) ? 1 : -1;
-              } else {
-                // Fallback Headshot Plane Lock relative to Soldier's own height
-                if (mag > 0.55) travelDir = (stickX >= 0) ? 1 : -1;
-                aimAngle = (travelDir > 0) ? 0 : Math.PI;
-                cursorX = anchorX + travelDir * aimOrbitPx;
-                cursorY = anchorY - (stageRect.height * 0.035);
-              }
-            }
-          } else {
-            // LT Released
-            ltHoldSeconds = 0;
-            headshotLocked = false;
-
-            if (rMag > stickDeadzone) {
-              // Progressive 360° Aim around the Soldier
-              const norm = Math.min(1, (rMag - stickDeadzone) / (1 - stickDeadzone));
-              const targetAngle = Math.atan2(pad.ry, pad.rx);
-              aimAngle = rotateAngleProgressively(aimAngle, targetAngle, norm, dt, 1.0);
-              travelDir = (Math.cos(aimAngle) >= 0) ? 1 : -1;
-              cursorX = anchorX + Math.cos(aimAngle) * aimOrbitPx;
-              cursorY = anchorY + Math.sin(aimAngle) * aimOrbitPx;
-            } else {
-              // STICK RELEASED (INSIDE DEADZONE):
-              // Zero aim directly in front of the soldier sprite in the direction of travel!
-              aimAngle = (travelDir > 0) ? 0 : Math.PI;
-              cursorX = anchorX + travelDir * zeroDistPx;
-              cursorY = anchorY;
-            }
-          }
-
-          // Clamp within Ruffle stage bounds
-          cursorX = Math.max(stageRect.left + 8, Math.min(stageRect.left + stageRect.width - 8, cursorX));
-          cursorY = Math.max(stageRect.top + 8, Math.min(stageRect.top + stageRect.height - 8, cursorY));
-        }
-
-        // 3. Inject Hardware Mouse Coordinates & RT Fire into Ruffle Stage
-        const wantFire = (pad.rt > 0.30) || (controlMode === 2 && pad.btnA);
-        syncStageMouse(cursorX, cursorY, wantFire);
-
-        // 4. Render Tactical Laser & Headshot Lock Reticle
-        renderHud(anchorX, anchorY, ltActive, rMag > stickDeadzone);
       }
 
       Object.assign(prevPad, pad);
       requestAnimationFrame(updateLoop);
-    }
-
-    function renderHud(anchorX, anchorY, ltActive, rightStickActive) {
-      ctx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
-
-      if (controlMode !== 2 && (ltActive || rightStickActive)) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(anchorX, anchorY);
-        ctx.lineTo(cursorX, cursorY);
-
-        if (headshotLocked) {
-          ctx.strokeStyle = "rgba(255, 45, 45, 0.9)";
-          ctx.lineWidth = 2.6;
-        } else if (ltActive) {
-          ctx.strokeStyle = "rgba(0, 245, 212, 0.80)";
-          ctx.lineWidth = 2.0;
-        } else {
-          ctx.strokeStyle = "rgba(0, 245, 212, 0.30)";
-          ctx.lineWidth = 1.3;
-          ctx.setLineDash([6, 6]);
-        }
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      if (controlMode !== 2 && ltActive) {
-        const progress = Math.min(1.0, ltHoldSeconds / 1.0);
-        const ringRadius = 34 - progress * 20;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(cursorX, cursorY, ringRadius, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
-        ctx.strokeStyle = headshotLocked ? "#ff3b30" : "#ecc94b";
-        ctx.lineWidth = 2.5;
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      ctx.save();
-      ctx.translate(cursorX, cursorY);
-
-      if (headshotLocked) {
-        ctx.rotate(Math.PI / 4);
-        ctx.strokeStyle = "#ff2e2e";
-        ctx.lineWidth = 2.5;
-        ctx.strokeRect(-9, -9, 18, 18);
-
-        ctx.rotate(-Math.PI / 4);
-        ctx.fillStyle = "#ffd60a";
-        ctx.beginPath();
-        ctx.arc(0, 0, 3, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.font = "bold 11px system-ui, sans-serif";
-        ctx.fillStyle = "#ff3b30";
-        ctx.textAlign = "center";
-        ctx.fillText("HEADSHOT LOCKED", 0, -18);
-      } else {
-        ctx.strokeStyle = (controlMode === 0) ? "#ff6b6b" : ((controlMode === 1) ? "#00f5d4" : "#63b3ed");
-        ctx.lineWidth = 2;
-        const g = 5, len = 11;
-        ctx.beginPath();
-        ctx.moveTo(-len, 0); ctx.lineTo(-g, 0);
-        ctx.moveTo(g, 0);    ctx.lineTo(len, 0);
-        ctx.moveTo(0, -len); ctx.lineTo(0, -g);
-        ctx.moveTo(0, g);    ctx.lineTo(0, len);
-        ctx.stroke();
-
-        ctx.fillStyle = "#ffffff";
-        ctx.beginPath();
-        ctx.arc(0, 0, 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      ctx.restore();
     }
 
     requestAnimationFrame(updateLoop);
