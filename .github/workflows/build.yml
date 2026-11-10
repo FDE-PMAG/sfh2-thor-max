@@ -31,20 +31,97 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: 5. Generate Android Native Project & Download Offline Ruffle Engine
+      - name: 5. Decompile & Patch SFH2 ActionScript 3 via JPEXS FFDec
+        run: |
+          SWF_FILE=$(find . -maxdepth 2 -iname "*.swf" | head -n 1)
+          if [ -z "$SWF_FILE" ]; then
+            echo "ERROR: No .swf file found in repository! Please upload sfh2.swf."
+            exit 1
+          fi
+          cp "$SWF_FILE" working_sfh2.swf
+
+          # Download JPEXS Free Flash Decompiler (FFDec CLI)
+          curl -L -s -o ffdec.zip https://github.com/jindrapetrik/jpexs-decompiler/releases/download/version22.0.1/ffdec_22.0.1.zip
+          unzip -q ffdec.zip -d ffdec_cli
+
+          # Export all ActionScript 3 classes from sfh2.swf
+          mkdir -p decompiled_as3
+          java -jar ffdec_cli/ffdec.jar -export script ./decompiled_as3 working_sfh2.swf || true
+
+          # Bundle all decompiled .as scripts into a zip + core text bundle for easy inspection
+          zip -r -q SFH2-Decompiled-Scripts.zip decompiled_as3/
+          python3 - << 'PYEOF'
+          import os, glob, re, subprocess
+
+          core_files = ["Game.as", "Player.as", "Unit.as", "Guns.as", "Main.as", "Menu.as", "Aimer.as"]
+          with open("sfh2_core_scripts.txt", "w", encoding="utf-8") as out:
+              for root, _, files in os.walk("decompiled_as3"):
+                  for f in sorted(files):
+                      if f in core_files:
+                          p = os.path.join(root, f)
+                          out.write(f"\n{'='*60}\nFILE: {p}\n{'='*60}\n")
+                          with open(p, "r", encoding="utf-8", errors="ignore") as src:
+                              out.write(src.read())
+
+          # Locate Game.as and inject the live ExternalInterface telemetry hook into EnterFrame
+          game_as_list = glob.glob("decompiled_as3/**/Game.as", recursive=True)
+          if game_as_list:
+              game_as_path = game_as_list[0]
+              with open(game_as_path, "r", encoding="utf-8", errors="ignore") as f:
+                  code = f.read()
+
+              if "import flash.external.ExternalInterface;" not in code:
+                  code = code.replace("package", "package\n{\nimport flash.external.ExternalInterface;\nimport flash.geom.Point;", 1).replace("package\n{\nimport flash.external.ExternalInterface;\nimport flash.geom.Point;\n{", "package\n{\nimport flash.external.ExternalInterface;\nimport flash.geom.Point;", 1)
+
+              hook_snippet = """
+              try {
+                 if(ExternalInterface.available && this.player != null && !this.player.dead && this.unitCont != null) {
+                    var _thorPlrPt:Point = this.unitCont.localToGlobal(new Point(this.player.x, this.player.y));
+                    var _thorBestD:Number = 999999;
+                    var _thorHX:Number = -1;
+                    var _thorHY:Number = -1;
+                    if(this.units != null) {
+                       for each(var _thorU:* in this.units) {
+                          if(_thorU != null && _thorU != this.player && !_thorU.dead && _thorU.team != this.player.team) {
+                             var _thorEPt:Point = (_thorU.curHead != null) ? _thorU.curHead.localToGlobal(new Point(0,0)) : this.unitCont.localToGlobal(new Point(_thorU.x, _thorU.y - 34));
+                             var _thorDist:Number = Math.abs(_thorEPt.x - _thorPlrPt.x) + Math.abs(_thorEPt.y - _thorPlrPt.y);
+                             if(_thorDist < _thorBestD) {
+                                _thorBestD = _thorDist;
+                                _thorHX = _thorEPt.x;
+                                _thorHY = _thorEPt.y;
+                             }
+                          }
+                       }
+                    }
+                    ExternalInterface.call("thorSyncGame", _thorPlrPt.x, _thorPlrPt.y, this.player.flip, _thorHX, _thorHY, this.paused);
+                 }
+              } catch(_thorErr:*) {}
+              """
+
+              pattern = r"(public\s+function\s+EnterFrame\s*\([^)]*\)\s*(?::\s*\w+)?\s*\{)"
+              if re.search(pattern, code):
+                  patched_code = re.sub(pattern, r"\1\n" + hook_snippet, code, count=1)
+                  with open(game_as_path, "w", encoding="utf-8") as f:
+                      f.write(patched_code)
+                  print("Patched Game.as with thorSyncGame hook; compiling back into SWF...")
+                  subprocess.run([
+                      "java", "-jar", "ffdec_cli/ffdec.jar",
+                      "-replace", "working_sfh2.swf", "patched_sfh2.swf",
+                      "Game", game_as_path
+                  ], check=False)
+                  if os.path.exists("patched_sfh2.swf") and os.path.getsize("patched_sfh2.swf") > 1000000:
+                      os.replace("patched_sfh2.swf", "working_sfh2.swf")
+                      print("Successfully compiled patched Game.as into working_sfh2.swf!")
+          PYEOF
+
+      - name: 6. Generate Android Native Project & Bundle Offline Ruffle
         run: |
           mkdir -p app/src/main/java/com/sfh2/thormax
           mkdir -p app/src/main/assets/ruffle
           mkdir -p app/src/main/res/values
 
           cp index.html app/src/main/assets/index.html
-
-          SWF_FILE=$(find . -maxdepth 2 -iname "*.swf" | head -n 1)
-          if [ -z "$SWF_FILE" ]; then
-            echo "ERROR: No .swf file found in repository! Please upload sfh2.swf."
-            exit 1
-          fi
-          cp "$SWF_FILE" app/src/main/assets/sfh2.swf
+          cp working_sfh2.swf app/src/main/assets/sfh2.swf
 
           npm pack @ruffle-rs/ruffle
           tar -xzf ruffle-rs-ruffle-*.tgz
@@ -93,8 +170,8 @@ jobs:
                   applicationId "com.sfh2.thormax"
                   minSdk 26
                   targetSdk 34
-                  versionCode 3
-                  versionName "1.2-ThorMax-NativeMouse"
+                  versionCode 4
+                  versionName "1.3-ThorMax-AS3Hook"
               }
 
               buildTypes {
@@ -201,7 +278,6 @@ jobs:
                   coords[0].pressure = isDown ? 1.0f : 0.0f;
                   coords[0].size = 1.0f;
 
-                  // 1. Always dispatch native mouse hover move so Ruffle updates stage.mouseX / stage.mouseY
                   MotionEvent hoverMove = MotionEvent.obtain(
                           now, now, MotionEvent.ACTION_HOVER_MOVE,
                           1, props, coords, 0, isDown ? MotionEvent.BUTTON_PRIMARY : 0,
@@ -210,7 +286,6 @@ jobs:
                   webView.dispatchGenericMotionEvent(hoverMove);
                   hoverMove.recycle();
 
-                  // 2. Dispatch native press / drag / release when firing (RT)
                   if (isDown && !mouseWasDown) {
                       mouseWasDown = true;
                       downTimestamp = now;
@@ -322,7 +397,7 @@ jobs:
                               "if(window.onNativeGamepadAxes)window.onNativeGamepadAxes(%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f);",
                               lx, ly, z, rz, rxAlt, ryAlt, lTrig, rTrig, brake, gas, hatX, hatY);
                       webView.evaluateJavascript(js, null);
-                      return true; // Consume raw joystick event so Chromium's broken mapper cannot hijack it
+                      return true;
                   }
                   return super.dispatchGenericMotionEvent(event);
               }
@@ -352,25 +427,21 @@ jobs:
 
               @Override
               public void onBackPressed() {
-                  // Prevent Android Back from closing the app
               }
           }
           EOF
 
-      - name: 6. Compile Signed APK
+      - name: 7. Compile Signed APK
         run: |
           gradle assembleDebug
           cp app/build/outputs/apk/debug/app-debug.apk StrikeForceHeroes2-ThorMax.apk
 
-      - name: 7. Upload APK to Workflow Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: StrikeForceHeroes2-ThorMax-APK
-          path: StrikeForceHeroes2-ThorMax.apk
-
-      - name: 8. Publish Direct Download Link to GitHub Releases
+      - name: 8. Publish APK & Decompiled AS3 Code to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.${{ github.run_number }}
-          name: "Strike Force Heroes 2 - Thor Max APK (Build #${{ github.run_number }})"
-          files: StrikeForceHeroes2-ThorMax.apk
+          tag_name: v1.3.${{ github.run_number }}
+          name: "Strike Force Heroes 2 - Thor Max APK + Decompiled AS3 (Build #${{ github.run_number }})"
+          files: |
+            StrikeForceHeroes2-ThorMax.apk
+            sfh2_core_scripts.txt
+            SFH2-Decompiled-Scripts.zip
